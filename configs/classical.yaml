@@ -1,0 +1,11 @@
+method: classical
+filter:
+  median_k: 3
+  gaussian_k: 5
+  gaussian_sigma: 1.0
+thresholder: otsu
+matching:
+  ws: 0.3
+  wc: 0.7
+assembly:
+  beam_k: 3

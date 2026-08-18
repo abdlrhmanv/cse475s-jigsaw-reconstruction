@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ipynb_checkpoints/
+*.pyc
+.env
+.DS_Store
+*.pt
+*.pth
+
+*.md
+!README.md
+!data/README.md
+Project Description.pdf

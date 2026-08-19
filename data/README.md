@@ -5,10 +5,11 @@ All puzzle data lives under `data/` (course spec). There is no top-level `detect
 ```
 data/
 ├── data.yaml              # class names (piece IDs 1–35) and split paths
+├── splits.json            # frozen stem lists (do not edit by hand)
 ├── input/                 # scrambled puzzle images (model input)
-│   ├── train/             # 4037 images — training only
-│   ├── val/               # 622 images — validation only
-│   └── test/              # 25 images — held-out test; never train on these
+│   ├── train/             # 4613 images — singles + most multi-piece boards
+│   ├── val/               # 35 multi-piece boards (9–35 pieces)
+│   └── test/              # 36 multi-piece boards (9–35 pieces); never train on these
 ├── ground_truth/          # labels, same filename stem as the image
 │   ├── train/
 │   ├── val/
@@ -20,11 +21,11 @@ data/
 
 **Label format:** YOLO line `class cx cy w h` (normalized 0–1). `class` is the piece identity (`1`–`35` in `data.yaml`). These are piece boxes, not a finished assembled grid.
 
-**Split rule (Milestone 2):** train / val / test are frozen by folder. Do not mix a test image or its pairs into training.
+**Split rule:** val and test contain only reconstruction boards (at least 9 unique pieces). Isolated 1-piece photos stay in train. Frozen in `splits.json`; do not mix a test image into training.
 
-**CLI:** pass an image from `data/input/test/` (or train/val during development):
+**CLI:** pass a board from `data/input/test/` (or train/val during development):
 
 ```bash
 python main.py reconstruct --method classical --config configs/classical.yaml \
-  --input data/input/test/1-LINE_ALBUM_-1_220521_0_jpg.rf.fe8a263c6682800d79f518484f4fe1f7.jpg
+  --input data/input/test/0718-1_Color_png.rf.f6b7f8ba974357f79903f0d9fcf4264e.jpg
 ```

@@ -13,9 +13,10 @@ INTERIOR_FLAT_PENALTY = 5.0e4
 
 
 class GreedyBestFirstAssembler(Assembler):
-    """Place pieces greedily, trying each rotation (0-3).
+    """Grow the board from the most confident adjacent placement.
 
-    Seeds the top-left cell with corner pieces (flats facing north+west).
+    Seeds the top-left cell with corner pieces (flats facing north+west), then
+    at each step fills the frontier cell whose best leftover piece is cheapest.
     Always fills every cell: illegal geometry is a large penalty, not a skip.
     """
 
@@ -43,13 +44,16 @@ class GreedyBestFirstAssembler(Assembler):
 
         seeds.sort(key=lambda s: s.total_dissim)
         beams = seeds[: max(self.beam_k, 1)]
+        target = min(rows * cols, n)
 
-        cells = [(r, c) for r in range(rows) for c in range(cols)]
-        for r, c in cells[1:]:
+        for _ in range(target - 1):
             next_beams: list[AssemblyState] = []
             for state in beams:
+                if len(state.used) >= target:
+                    next_beams.append(state)
+                    continue
                 next_beams.extend(
-                    self._candidates_for_cell(state, pieces, tensor, r, c, rows, cols)
+                    self._expand_frontier(state, pieces, tensor, rows, cols)
                 )
             if not next_beams:
                 break
@@ -58,6 +62,45 @@ class GreedyBestFirstAssembler(Assembler):
 
         beams.sort(key=lambda s: s.total_dissim)
         return beams[0]
+
+    def _expand_frontier(
+        self,
+        state: AssemblyState,
+        pieces: list[Piece],
+        tensor: CompatibilityTensor,
+        rows: int,
+        cols: int,
+    ) -> list[AssemblyState]:
+        frontier = self._frontier_cells(state, rows, cols)
+        if not frontier:
+            return [state]
+        moves: list[AssemblyState] = []
+        for r, c in frontier:
+            moves.extend(
+                self._candidates_for_cell(state, pieces, tensor, r, c, rows, cols)
+            )
+        if not moves:
+            return [state]
+        moves.sort(key=lambda s: s.total_dissim)
+        return moves[: max(self.beam_k, 1)]
+
+    @staticmethod
+    def _frontier_cells(
+        state: AssemblyState, rows: int, cols: int
+    ) -> list[tuple[int, int]]:
+        empty: list[tuple[int, int]] = []
+        adjacent: list[tuple[int, int]] = []
+        for r in range(rows):
+            for c in range(cols):
+                if state.grid[r][c] is not None:
+                    continue
+                empty.append((r, c))
+                for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < rows and 0 <= nc < cols and state.grid[nr][nc] is not None:
+                        adjacent.append((r, c))
+                        break
+        return adjacent if adjacent else empty
 
     @staticmethod
     def _side(piece: Piece, rot: int, board_dir: int) -> str | None:
@@ -186,11 +229,13 @@ class CanvasReconstructor(ImageReconstructor):
         by_index = {i: p for i, p in enumerate(puzzle.pieces)}
         rows = len(state.grid)
         cols = len(state.grid[0]) if rows > 0 else 0
+        if not puzzle.pieces:
+            return np.zeros((1, 1, 3), dtype=np.uint8)
 
-        max_h = max((p.image.shape[0] for p in puzzle.pieces), default=1)
-        max_w = max((p.image.shape[1] for p in puzzle.pieces), default=1)
-        cell_h, cell_w = max_h, max_w
-
+        # Median extent so one oversized blob cannot stretch every cell.
+        extents = [max(p.image.shape[0], p.image.shape[1]) for p in puzzle.pieces]
+        cell = max(int(np.median(extents)), 1)
+        cell_h = cell_w = cell
         canvas = np.zeros((rows * cell_h, cols * cell_w, 3), dtype=np.uint8)
 
         for r in range(rows):
@@ -205,16 +250,20 @@ class CanvasReconstructor(ImageReconstructor):
                 mask = piece.mask.copy()
                 if img.ndim == 2:
                     img = np.stack([img, img, img], axis=-1)
-                if placement.rot > 0:
-                    img = np.rot90(img, k=placement.rot)
-                    mask = np.rot90(mask, k=placement.rot)
+                # Placement.rot is clockwise; np.rot90(k) is counter-clockwise.
+                if placement.rot % 4:
+                    k = (-placement.rot) % 4
+                    img = np.rot90(img, k=k)
+                    mask = np.rot90(mask, k=k)
 
+                img, mask = _fit_in_cell(img, mask, cell_h, cell_w)
                 ph, pw = img.shape[:2]
-                y0 = r * cell_h + (cell_h - ph) // 2
-                x0 = c * cell_w + (cell_w - pw) // 2
-                y1 = min(y0 + ph, canvas.shape[0])
-                x1 = min(x0 + pw, canvas.shape[1])
-                y0c, x0c = max(y0, 0), max(x0, 0)
+                cell_y0, cell_x0 = r * cell_h, c * cell_w
+                y0 = cell_y0 + (cell_h - ph) // 2
+                x0 = cell_x0 + (cell_w - pw) // 2
+                y1 = min(y0 + ph, cell_y0 + cell_h)
+                x1 = min(x0 + pw, cell_x0 + cell_w)
+                y0c, x0c = max(y0, cell_y0), max(x0, cell_x0)
                 sy, sx = y0c - y0, x0c - x0
                 sh, sw = y1 - y0c, x1 - x0c
                 if sh <= 0 or sw <= 0:
@@ -226,3 +275,17 @@ class CanvasReconstructor(ImageReconstructor):
                 canvas[y0c:y1, x0c:x1] = dest
 
         return canvas
+
+
+def _fit_in_cell(
+    img: np.ndarray, mask: np.ndarray, cell_h: int, cell_w: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Nearest-neighbour shrink so a crop cannot spill into neighbouring cells."""
+    ph, pw = img.shape[:2]
+    if ph <= cell_h and pw <= cell_w:
+        return img, mask
+    scale = min(cell_h / ph, cell_w / pw)
+    nh, nw = max(1, int(ph * scale)), max(1, int(pw * scale))
+    ys = (np.arange(nh) * (ph / nh)).astype(int)
+    xs = (np.arange(nw) * (pw / nw)).astype(int)
+    return img[np.ix_(ys, xs)], mask[np.ix_(ys, xs)]

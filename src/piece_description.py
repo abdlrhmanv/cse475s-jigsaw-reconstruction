@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 
+from src.contour_extraction import MooreContourTracer, deskew_piece
 from src.core.protocols import CornerFinder, PieceDescriptor
 from src.core.types import Piece, Side, SideClass
+from src.core.ribbons import pack_ribbon
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +251,7 @@ def _classify_side(
     length = 1.0
     if side_pts is not None and len(side_pts) >= 2:
         length = float(np.linalg.norm(side_pts[-1].astype(np.float64) - side_pts[0].astype(np.float64)))
-    if peak < max(3.0, 0.08 * length):
+    if peak < max(4.0, 0.14 * length):
         return "flat"
     if side_pts is not None and centroid is not None and len(side_pts) >= 2:
         chord = 0.5 * (side_pts[0].astype(np.float64) + side_pts[-1].astype(np.float64))
@@ -272,7 +274,11 @@ def _signed_profile(side_pts: np.ndarray) -> np.ndarray:
         return np.linalg.norm(side_pts.astype(np.float64) - a, axis=1)
     # Signed distance: cross(ab, ap) / |ab|
     ap = side_pts.astype(np.float64) - a
-    return (ab[0] * ap[:, 1] - ab[1] * ap[:, 0]) / ab_len
+    raw = (ab[0] * ap[:, 1] - ab[1] * ap[:, 0]) / ab_len
+    if len(raw) >= 5:
+        kernel = np.ones(5) / 5.0
+        raw = np.convolve(np.pad(raw, 2, mode="edge"), kernel, mode="valid")
+    return raw
 
 
 def _rgb_to_lab_approx(rgb: np.ndarray) -> np.ndarray:
@@ -357,6 +363,25 @@ class PieceDescriptorImpl(PieceDescriptor):
         self.n_colour_samples = n_colour_samples
 
     def describe(self, piece: Piece) -> Piece:
+        piece = deskew_piece(piece, tracer=MooreContourTracer())
+        if piece.contour is None or len(piece.contour) < 4:
+            ys, xs = np.nonzero(piece.mask)
+            if len(xs):
+                piece.contour = np.array(
+                    [
+                        [int(xs.min()), int(ys.min())],
+                        [int(xs.max()), int(ys.min())],
+                        [int(xs.max()), int(ys.max())],
+                        [int(xs.min()), int(ys.max())],
+                    ],
+                    dtype=np.int32,
+                )
+            else:
+                h, w = piece.mask.shape[:2]
+                piece.contour = np.array(
+                    [[0, 0], [max(w - 1, 0), 0], [max(w - 1, 0), max(h - 1, 0)], [0, max(h - 1, 0)]],
+                    dtype=np.int32,
+                )
         corners = self.corner_finder.find(piece.contour)
         piece.corners = corners
 
@@ -378,7 +403,7 @@ class PieceDescriptorImpl(PieceDescriptor):
                 cls=cls,
                 profile=profile,
                 colour=colour,
-                ribbon=np.empty((0,)),
+                ribbon=pack_ribbon(colour, profile),
                 contour_pts=seg,
             ))
         piece.sides = sides

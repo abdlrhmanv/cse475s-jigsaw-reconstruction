@@ -17,8 +17,9 @@ segmentation:
   min_solidity: 0.35      # drop spindly debris (area / bbox area)
   close_k: 3              # small close; large kernels merge neighbouring pieces
   keep_n: 35              # keep the 35 largest remaining blobs
+  use_gt_boxes: true      # crop from YOLO labels when data/ground_truth exists
 matching:
-  ws: 0.3  # shape weight
-  wc: 0.7  # colour weight (often higher on textured pieces)
+  ws: 0.85  # shape weight (tabs/blanks after clean silhouettes)
+  wc: 0.15  # colour weight (most faces are near-white)
 assembly:
   beam_k: 8  # top-K alternatives per greedy step

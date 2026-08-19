@@ -1,0 +1,5 @@
+{
+  "method": "classical",
+  "weights": null,
+  "checkpoints_dir": "checkpoints"
+}

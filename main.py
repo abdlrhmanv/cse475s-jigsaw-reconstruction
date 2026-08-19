@@ -33,6 +33,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         required=True,
         help="Path to a scrambled puzzle image.",
     )
+
+    train = sub.add_parser("train-siamese", help="Train the Siamese ribbon CNN (synthetic pairs by default).")
+    train.add_argument("--epochs", type=int, default=20)
+    train.add_argument("--batch-size", type=int, default=32)
+    train.add_argument("--ckpt", default="checkpoints/siamese.pt")
+
+    train_g = sub.add_parser("train-gnn", help="Train the side-node GNN on synthetic grids.")
+    train_g.add_argument("--epochs", type=int, default=40)
+    train_g.add_argument("--ckpt", default="checkpoints/gnn.pt")
     return parser.parse_args(argv)
 
 
@@ -46,6 +55,14 @@ def load_config(path: str, method: str) -> dict:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    if args.command == "train-siamese":
+        from src.ml.train_siamese import train_siamese
+        train_siamese(epochs=args.epochs, batch_size=args.batch_size, ckpt_path=args.ckpt)
+        return
+    if args.command == "train-gnn":
+        from src.ml.train_gnn import train_gnn
+        train_gnn(epochs=args.epochs, ckpt_path=args.ckpt)
+        return
     if args.command != "reconstruct":
         raise SystemExit(2)
     config = load_config(args.config, args.method)

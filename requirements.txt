@@ -3,3 +3,4 @@ matplotlib
 pytest
 pillow
 pyyaml
+torch

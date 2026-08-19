@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+
+from src.core.types import Piece
 
 
 class StageVisualizer:
@@ -50,3 +53,29 @@ class StageVisualizer:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(path, dpi=120)
         plt.close(fig)
+
+    def save_image(self, path: str | Path, image: np.ndarray) -> None:
+        from src.core.io import ImageStore
+        ImageStore().save(path, image)
+
+    def save_json(self, path: str | Path, payload: dict) -> None:
+        dest = Path(path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
+
+    def overlay_contours(self, image: np.ndarray, pieces: list[Piece]) -> np.ndarray:
+        """Draw each piece contour in red on a copy of the scrambled photo."""
+        canvas = np.clip(image, 0, 255).astype(np.uint8)
+        if canvas.ndim == 2:
+            canvas = np.stack([canvas, canvas, canvas], axis=-1)
+        else:
+            canvas = canvas[..., :3].copy()
+        h, w = canvas.shape[:2]
+        for piece in pieces:
+            x0, y0, _, _ = piece.bbox
+            if piece.contour is None or len(piece.contour) == 0:
+                continue
+            xs = np.clip(np.rint(piece.contour[:, 0] + x0).astype(int), 0, w - 1)
+            ys = np.clip(np.rint(piece.contour[:, 1] + y0).astype(int), 0, h - 1)
+            canvas[ys, xs] = (255, 0, 0)
+        return canvas

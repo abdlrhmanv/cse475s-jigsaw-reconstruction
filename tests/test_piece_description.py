@@ -98,3 +98,29 @@ def test_descriptor_square_is_all_flat():
     flat_count = sum(1 for s in result.sides if s.cls == "flat")
     assert flat_count == 4
     assert result.is_corner is True
+
+
+def test_deskew_uprights_tilted_rectangle():
+    """A 30°-tilted rectangle should be axis-aligned after describe()."""
+    from src.contour_extraction import MooreContourTracer, _rotate_nn, deskew_piece
+
+    mask = np.zeros((80, 80), dtype=np.uint8)
+    mask[20:60, 25:55] = 255
+    tilted = _rotate_nn(mask, np.deg2rad(30))
+    contour = MooreContourTracer().trace(tilted)
+    piece = Piece(
+        id=0,
+        image=np.stack([tilted, tilted, tilted], axis=-1),
+        mask=tilted,
+        contour=contour,
+        bbox=(0, 0, 79, 79),
+        pca_theta=0.0,
+        corners=np.empty((4, 2)),
+    )
+    out = deskew_piece(piece)
+    ys, xs = np.nonzero(out.mask)
+    width = xs.max() - xs.min()
+    height = ys.max() - ys.min()
+    # Axis-aligned 30×40 rectangle: aspect closer to 30/40 than to a diamond.
+    assert min(width, height) / max(width, height) < 0.85
+

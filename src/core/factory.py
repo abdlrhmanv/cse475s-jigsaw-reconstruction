@@ -8,9 +8,10 @@ matcher only; piece extraction stays shared so M1 vs M2 is a fair comparison.
 from __future__ import annotations
 
 from src.assembly import CanvasReconstructor, GreedyBestFirstAssembler
-from src.contour_extraction import PieceExtractorImpl
+from src.contour_extraction import PieceExtractorImpl, YoloBoxExtractor
 from src.core.convolution import ConvolutionEngine
 from src.core.viz import StageVisualizer
+from src.edge_detection import CannyEdgeDetector
 from src.edge_matching import ClassicalCompatibilityMatcher
 from src.enhancement import (
     BinaryCloser,
@@ -60,11 +61,20 @@ class PipelineFactory:
         matching = config.get("matching", {})
         if method == "classical":
             matcher = ClassicalCompatibilityMatcher(
-                ws=float(matching.get("ws", 0.3)),
-                wc=float(matching.get("wc", 0.7)),
+                ws=float(matching.get("ws", 0.85)),
+                wc=float(matching.get("wc", 0.15)),
             )
-        elif method in {"siamese", "gnn"}:
-            raise NotImplementedError(f"Milestone 2 matcher: {method}")
+        elif method == "siamese":
+            from src.ml.siamese_matcher import SiameseCompatibilityMatcher
+            matcher = SiameseCompatibilityMatcher(
+                weights=matching.get("weights", "checkpoints/siamese.pt"),
+            )
+        elif method == "gnn":
+            from src.ml.gnn_matcher import GNNCompatibilityMatcher
+            matcher = GNNCompatibilityMatcher(
+                weights=matching.get("weights", "checkpoints/gnn.pt"),
+                top_k=int(matching.get("top_k", 8)),
+            )
         else:
             raise ValueError(f"unknown method: {method}")
 
@@ -89,10 +99,12 @@ class PipelineFactory:
                 keep_n=int(keep_n) if keep_n is not None else None,
             ),
             extractor=PieceExtractorImpl(),
+            box_extractor=YoloBoxExtractor(),
             descriptor=PieceDescriptorImpl(),
             matcher=matcher,
             assembler=GreedyBestFirstAssembler(beam_k=beam_k),
             reconstructor=CanvasReconstructor(),
             evaluator=ReconstructionEvaluator(),
             visualizer=StageVisualizer(),
+            edge_detector=CannyEdgeDetector(),
         )

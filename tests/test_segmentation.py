@@ -1,7 +1,14 @@
+from pathlib import Path
+
 import numpy as np
 
 from src.core.protocols import ContourTracer, Labeler, PieceExtractor
-from src.contour_extraction import MooreContourTracer, PieceExtractorImpl
+from src.contour_extraction import (
+    MooreContourTracer,
+    PieceExtractorImpl,
+    YoloBoxExtractor,
+    gt_label_path,
+)
 from src.segmentation import ConnectedComponentLabeler
 
 
@@ -94,3 +101,46 @@ def test_piece_extractor_returns_pieces():
         assert p.image.ndim == 3
         assert p.mask.max() == 255
         assert p.contour.shape[1] == 2
+
+
+def test_overlay_contours_paints_red(tmp_path):
+    from src.core.viz import StageVisualizer
+
+    img = np.zeros((20, 20, 3), dtype=np.uint8)
+    binary = np.zeros((20, 20), dtype=np.float64)
+    binary[4:12, 4:12] = 255
+    labels = ConnectedComponentLabeler(min_area=4).label(binary)
+    pieces = PieceExtractorImpl(pad=0).extract(img, labels)
+    overlay = StageVisualizer().overlay_contours(img, pieces)
+    assert overlay[..., 0].max() == 255
+    StageVisualizer().save_json(tmp_path / "metrics.json", {"n": 1})
+    assert (tmp_path / "metrics.json").exists()
+
+
+def test_yolo_box_extractor(tmp_path: Path):
+    img = np.zeros((40, 80, 3), dtype=np.uint8)
+    img[5:15, 5:15] = 220
+    img[5:15, 50:65] = 220
+    labels = tmp_path / "boxes.txt"
+    # YOLO: class cx cy w h  (normalized)
+    labels.write_text(
+        "0 0.125 0.25 0.125 0.25\n"
+        "1 0.71875 0.25 0.1875 0.25\n"
+    )
+    pieces = YoloBoxExtractor(pad=1).extract(img, labels)
+    assert len(pieces) == 2
+    for p in pieces:
+        assert p.mask.max() == 255
+        assert len(p.contour) >= 4
+        assert p.id in (0, 1)
+
+
+def test_gt_label_path(tmp_path: Path):
+    img = tmp_path / "input" / "test" / "board.jpg"
+    lbl = tmp_path / "ground_truth" / "test" / "board.txt"
+    img.parent.mkdir(parents=True)
+    lbl.parent.mkdir(parents=True)
+    img.write_bytes(b"x")
+    lbl.write_text("0 0.5 0.5 0.1 0.1\n")
+    found = gt_label_path(img)
+    assert found == lbl

@@ -4,6 +4,7 @@ import pytest
 from src.core.convolution import ConvolutionEngine
 from src.core.protocols import ImageFilter
 from src.enhancement import (
+    BinaryHoleFiller,
     ContrastStretcher,
     FilterChain,
     GaussianFilter,
@@ -140,3 +141,22 @@ def test_unsharp_mask_enhances():
 def test_empty_chain_is_identity():
     img = np.random.rand(5, 5) * 255
     np.testing.assert_array_equal(FilterChain([]).apply(img), img)
+
+
+def test_hole_filler_closes_interior():
+    img = np.zeros((20, 20), dtype=np.float64)
+    img[4:16, 4:16] = 255
+    img[8:12, 8:12] = 0
+    filled = BinaryHoleFiller().apply(img)
+    assert filled[10, 10] == 255
+    assert filled[0, 0] == 0
+    assert filled[5, 5] == 255
+
+
+def test_binary_closer_seals_gap():
+    from src.enhancement import BinaryCloser
+    img = np.zeros((21, 21), dtype=np.float64)
+    img[8:13, 2:9] = 255
+    img[8:13, 12:19] = 255
+    closed = BinaryCloser(k=5).apply(img)
+    assert closed[10, 10] == 255

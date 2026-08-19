@@ -40,14 +40,22 @@ def _colour_dissimilarity(colour_a: np.ndarray, colour_b: np.ndarray, n: int = 3
     """Mean squared Lab distance between two colour strips (reversed alignment)."""
     ca = _resample(colour_a, n)
     cb = _resample(colour_b, n)[::-1]
-    return float(np.mean(np.sum((ca - cb) ** 2, axis=1)))
+    valid = (np.abs(ca).sum(axis=1) > 1e-6) & (np.abs(cb).sum(axis=1) > 1e-6)
+    if not np.any(valid):
+        return 0.0
+    diff = ca[valid] - cb[valid]
+    return float(np.mean(np.sum(diff ** 2, axis=1)))
+
+
+ILLEGAL_COST = 1.0e6
 
 
 class ClassicalCompatibilityMatcher(CompatibilityMatcher):
     """Build (N, 4, N, 4) dissimilarity tensor using shape + colour.
 
     D(i, si, j, sj) = ws * shape_dissim + wc * colour_dissim.
-    Self-pairing and geometrically illegal combos (tab-tab, blank-blank) → inf.
+    Self-pairs stay inf. Same-class (tab-tab / blank-blank) and flat sides
+    get a large finite penalty so the assembler can still fill every cell.
     """
 
     def __init__(self, ws: float = 0.3, wc: float = 0.7) -> None:
@@ -63,8 +71,6 @@ class ClassicalCompatibilityMatcher(CompatibilityMatcher):
                 continue
             for si in range(4):
                 side_a = pieces[i].sides[si]
-                if side_a.cls == "flat":
-                    continue  # flat sides face the border, not another piece
                 for j in range(n):
                     if i == j:
                         continue
@@ -72,14 +78,13 @@ class ClassicalCompatibilityMatcher(CompatibilityMatcher):
                         continue
                     for sj in range(4):
                         side_b = pieces[j].sides[sj]
-                        if side_b.cls == "flat":
-                            continue
-                        # Geometric compatibility: tab must pair with blank
-                        if side_a.cls == side_b.cls:
-                            continue  # tab-tab or blank-blank → inf
-
                         ds = _shape_dissimilarity(side_a.profile, side_b.profile)
                         dc = _colour_dissimilarity(side_a.colour, side_b.colour)
-                        dissim[i, si, j, sj] = self.ws * ds + self.wc * dc
+                        cost = self.ws * ds + self.wc * dc
+                        if side_a.cls == "flat" or side_b.cls == "flat":
+                            cost += ILLEGAL_COST
+                        elif side_a.cls == side_b.cls:
+                            cost += ILLEGAL_COST
+                        dissim[i, si, j, sj] = cost
 
         return CompatibilityTensor(dissim=dissim)

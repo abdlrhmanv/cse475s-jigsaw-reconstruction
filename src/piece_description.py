@@ -79,10 +79,52 @@ def _order_corners_clockwise(corners: np.ndarray) -> np.ndarray:
     angles = np.arctan2(corners[:, 1] - cy, corners[:, 0] - cx)
     order = np.argsort(angles)
     ordered = corners[order]
-    # Rotate so that the top-left (smallest x+y) is first
     sums = ordered[:, 0] + ordered[:, 1]
     shift = int(np.argmin(sums))
     return np.roll(ordered, -shift, axis=0)
+
+
+def _pca_rect_corners(pts: np.ndarray) -> np.ndarray:
+    """Four corners of the min-area PCA rectangle of `pts`, clockwise from TL."""
+    xy = pts.astype(np.float64)
+    mean = xy.mean(axis=0)
+    centered = xy - mean
+    if len(xy) < 3:
+        return _order_corners_clockwise(xy[:4] if len(xy) else np.zeros((4, 2)))
+    cov = np.cov(centered.T)
+    if cov.shape != (2, 2) or np.linalg.det(cov) < 1e-12:
+        mins, maxs = xy.min(axis=0), xy.max(axis=0)
+        raw = np.array([
+            [mins[0], mins[1]],
+            [maxs[0], mins[1]],
+            [maxs[0], maxs[1]],
+            [mins[0], maxs[1]],
+        ])
+        return _order_corners_clockwise(raw)
+    _, eigvecs = np.linalg.eigh(cov)
+    proj = centered @ eigvecs
+    lo, hi = proj.min(axis=0), proj.max(axis=0)
+    corners_pca = np.array([
+        [lo[0], lo[1]],
+        [hi[0], lo[1]],
+        [hi[0], hi[1]],
+        [lo[0], hi[1]],
+    ])
+    return _order_corners_clockwise(corners_pca @ eigvecs.T + mean)
+
+
+def _snap_to_contour(corners: np.ndarray, contour: np.ndarray) -> np.ndarray:
+    snapped = np.zeros_like(corners)
+    used: set[int] = set()
+    for i, c in enumerate(corners):
+        dists = np.linalg.norm(contour.astype(np.float64) - c.astype(np.float64), axis=1)
+        for idx in np.argsort(dists):
+            j = int(idx)
+            if j not in used:
+                snapped[i] = contour[j]
+                used.add(j)
+                break
+    return snapped
 
 
 # ---------------------------------------------------------------------------
@@ -90,10 +132,11 @@ def _order_corners_clockwise(corners: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 class HybridCornerFinder(CornerFinder):
-    """Hull → RDP simplification → pick 4 points with best interior angles.
+    """PCA rectangle snapped onto the contour.
 
-    True jigsaw corners are near 90° on the convex hull; tab tips are concave
-    and filtered out by requiring hull membership.
+    Tab tips sit on the convex hull, so hull+90° picking often returns tabs.
+    The PCA rectangle tracks the piece body; nearest contour points are the
+    true corners.
     """
 
     def __init__(self, epsilon_frac: float = 0.02) -> None:
@@ -102,33 +145,9 @@ class HybridCornerFinder(CornerFinder):
     def find(self, contour: np.ndarray) -> np.ndarray:
         if len(contour) < 4:
             return contour[:4] if len(contour) > 0 else np.zeros((4, 2), dtype=np.int32)
-
-        hull_idx = _convex_hull(contour)
-        hull_pts = contour[hull_idx]
-
-        perimeter = float(np.sum(np.linalg.norm(np.diff(hull_pts, axis=0, append=hull_pts[:1]), axis=1)))
-        eps = self.epsilon_frac * perimeter
-        simplified = _rdp(hull_pts, eps)
-
-        # Close the polygon for angle computation
-        if len(simplified) < 4:
-            simplified = hull_pts
-
-        n = len(simplified)
-        # Score each vertex by how close its interior angle is to 90°
-        scores: list[tuple[float, int]] = []
-        for i in range(n):
-            a = simplified[(i - 1) % n]
-            b = simplified[i]
-            c = simplified[(i + 1) % n]
-            angle = _interior_angle(a, b, c)
-            scores.append((abs(angle - 90.0), i))
-        scores.sort()
-
-        # Pick 4 best-scoring vertices
-        selected = sorted([s[1] for s in scores[:4]])
-        corners = simplified[selected]
-        return _order_corners_clockwise(corners)
+        rect = _pca_rect_corners(contour)
+        snapped = _snap_to_contour(rect, contour)
+        return _order_corners_clockwise(snapped)
 
 
 class CurvatureCornerFinder(CornerFinder):
@@ -182,44 +201,63 @@ def _split_contour_by_corners(
     contour: np.ndarray,
     corners: np.ndarray,
 ) -> list[np.ndarray]:
-    """Split contour into 4 side segments between consecutive corner points.
+    """Split contour into 4 side segments following corner order (TL→TR→BR→BL).
 
-    Returns list of 4 arrays, each (K_i, 2): points from corner i to corner i+1.
+    Walks forward along the clockwise contour; does not re-sort indices, so
+    side 0 stays the top side.
     """
     n = len(contour)
-    # Find contour index closest to each corner
-    corner_indices: list[int] = []
+    idxs: list[int] = []
     for c in corners:
         dists = np.linalg.norm(contour.astype(np.float64) - c.astype(np.float64), axis=1)
-        corner_indices.append(int(np.argmin(dists)))
-
-    # Sort corner indices along contour order
-    corner_indices.sort()
+        idxs.append(int(np.argmin(dists)))
 
     sides: list[np.ndarray] = []
     for i in range(4):
-        start = corner_indices[i]
-        end = corner_indices[(i + 1) % 4]
-        if end > start:
-            sides.append(contour[start : end + 1])
-        else:
-            sides.append(np.vstack([contour[start:], contour[: end + 1]]))
+        start = idxs[i]
+        end = idxs[(i + 1) % 4]
+        if start == end:
+            sides.append(contour[start : start + 1])
+            continue
+        pts: list[np.ndarray] = []
+        j = start
+        guard = 0
+        while guard <= n:
+            pts.append(contour[j])
+            if j == end and guard > 0:
+                break
+            j = (j + 1) % n
+            guard += 1
+        sides.append(np.asarray(pts))
     return sides
 
 
-def _classify_side(profile: np.ndarray) -> SideClass:
-    """Classify a side as tab, blank, or flat based on its signed profile.
+def _classify_side(
+    profile: np.ndarray,
+    side_pts: np.ndarray | None = None,
+    centroid: np.ndarray | None = None,
+) -> SideClass:
+    """Classify a side as tab, blank, or flat.
 
-    Profile is the signed perpendicular distance from the corner-to-corner line.
-    Positive = outward (tab), negative = inward (blank), near-zero = flat.
+    Flat = peak deviation small vs side length.
+    Tab vs blank uses the piece centroid when available (curve farther from
+    centroid than the chord → tab), otherwise the sign of the profile mean.
     """
     if len(profile) == 0:
         return "flat"
     peak = float(np.max(np.abs(profile)))
-    mean_dev = float(np.mean(profile))
-    if peak < 3.0:
+    length = 1.0
+    if side_pts is not None and len(side_pts) >= 2:
+        length = float(np.linalg.norm(side_pts[-1].astype(np.float64) - side_pts[0].astype(np.float64)))
+    if peak < max(3.0, 0.08 * length):
         return "flat"
-    return "tab" if mean_dev > 0 else "blank"
+    if side_pts is not None and centroid is not None and len(side_pts) >= 2:
+        chord = 0.5 * (side_pts[0].astype(np.float64) + side_pts[-1].astype(np.float64))
+        curve = side_pts.astype(np.float64).mean(axis=0)
+        if np.linalg.norm(curve - centroid) >= np.linalg.norm(chord - centroid):
+            return "tab"
+        return "blank"
+    return "tab" if float(np.mean(profile)) > 0 else "blank"
 
 
 def _signed_profile(side_pts: np.ndarray) -> np.ndarray:
@@ -285,10 +323,16 @@ def _sample_colour_strip(
     normal /= normal_len
 
     h, w = mask.shape[:2]
-    # Subsample side points
     indices = np.linspace(0, len(side_pts) - 1, n_samples).astype(int)
     samples: list[np.ndarray] = []
     img_f = image.astype(np.float64) / 255.0 if image.max() > 1.0 else image.astype(np.float64)
+
+    # Flip the normal if the first sample would land outside the piece.
+    probe = side_pts[len(side_pts) // 2].astype(np.float64) + normal * inward_px
+    px, py = int(round(probe[0])), int(round(probe[1]))
+    if not (0 <= px < w and 0 <= py < h and mask[py, px] > 0):
+        normal = -normal
+
     for idx in indices:
         pt = side_pts[idx].astype(np.float64) + normal * inward_px
         x, y = int(round(pt[0])), int(round(pt[1]))
@@ -316,11 +360,14 @@ class PieceDescriptorImpl(PieceDescriptor):
         corners = self.corner_finder.find(piece.contour)
         piece.corners = corners
 
+        ys, xs = np.nonzero(piece.mask)
+        centroid = np.array([xs.mean(), ys.mean()], dtype=np.float64) if len(xs) else corners.mean(axis=0)
+
         side_segments = _split_contour_by_corners(piece.contour, corners)
         sides: list[Side] = []
         for i, seg in enumerate(side_segments):
             profile = _signed_profile(seg)
-            cls = _classify_side(profile)
+            cls = _classify_side(profile, seg, centroid)
             colour = _sample_colour_strip(
                 piece.image, piece.mask, seg,
                 inward_px=self.inward_px,
@@ -331,7 +378,7 @@ class PieceDescriptorImpl(PieceDescriptor):
                 cls=cls,
                 profile=profile,
                 colour=colour,
-                ribbon=np.empty((0,)),  # filled in Milestone 2
+                ribbon=np.empty((0,)),
                 contour_pts=seg,
             ))
         piece.sides = sides

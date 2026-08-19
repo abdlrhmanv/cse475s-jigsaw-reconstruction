@@ -36,6 +36,35 @@ def test_ccl_filters_dust():
     assert len(unique) == 1  # dust removed
 
 
+def test_ccl_drops_thin_blob():
+    binary = np.zeros((40, 40), dtype=np.float64)
+    binary[5:15, 5:15] = 255       # 10×10 square
+    binary[2, 2:38] = 255          # 1×36 bar
+    labels = ConnectedComponentLabeler(min_area=5, max_aspect=4.0).label(binary)
+    unique = set(np.unique(labels)) - {0}
+    assert len(unique) == 1
+
+
+def test_ccl_keep_n_largest():
+    binary = np.zeros((40, 80), dtype=np.float64)
+    binary[2:12, 2:12] = 255       # 100
+    binary[2:10, 30:38] = 255      # 64
+    binary[2:6, 50:54] = 255       # 16
+    labels = ConnectedComponentLabeler(min_area=1, keep_n=2).label(binary)
+    unique = set(np.unique(labels)) - {0}
+    assert len(unique) == 2
+
+
+def test_ccl_drops_low_solidity():
+    binary = np.zeros((40, 40), dtype=np.float64)
+    binary[2:16, 2:16] = 255  # solid square
+    for i in range(12):
+        binary[i, 25 + i] = 255  # disconnected diagonal, low solidity
+    labels = ConnectedComponentLabeler(min_area=1, min_solidity=0.4).label(binary)
+    unique = set(np.unique(labels)) - {0}
+    assert len(unique) == 1
+
+
 def test_moore_traces_square():
     mask = np.zeros((20, 20), dtype=np.uint8)
     mask[5:15, 5:15] = 255

@@ -11,6 +11,7 @@ from src.core.protocols import (
     Assembler,
     CompatibilityMatcher,
     Evaluator,
+    ImageFilter,
     ImageReconstructor,
     Labeler,
     PieceDescriptor,
@@ -35,9 +36,11 @@ class ReconstructionPipeline:
         reconstructor: ImageReconstructor,
         evaluator: Evaluator | None = None,
         visualizer: StageVisualizer | None = None,
+        hole_filler: ImageFilter | None = None,
     ) -> None:
         self.filters = filters
         self.thresholder = thresholder
+        self.hole_filler = hole_filler
         self.labeler = labeler
         self.extractor = extractor
         self.descriptor = descriptor
@@ -65,9 +68,11 @@ class ReconstructionPipeline:
             titles=["Original", "Enhanced"],
         )
 
-        # 3 — Threshold
+        # 3 — Threshold + optional hole fill (printed texture must not split a piece)
         gray = _ensure_gray(enhanced)
         binary = self.thresholder.threshold(gray)
+        if self.hole_filler is not None:
+            binary = self.hole_filler.apply(binary)
         self.visualizer.save_side_by_side(
             out_dir / "02_binary.png",
             [gray, binary],
@@ -107,7 +112,14 @@ class ReconstructionPipeline:
         canvas = self.reconstructor.reconstruct(puzzle, state)
         self._io.save(out_dir / "04_reconstructed.png", canvas)
 
+        placed = sum(1 for row in state.grid for cell in row if cell is not None)
+        print(
+            f"extracted {len(pieces)} pieces | grid {rows}×{cols} | "
+            f"placed {placed} | labels {int(labels.max())}"
+        )
+
         return ReconstructionResult(
             state=state,
             image=canvas,
+            metrics={"n_pieces": len(pieces), "n_placed": placed, "rows": rows, "cols": cols},
         )

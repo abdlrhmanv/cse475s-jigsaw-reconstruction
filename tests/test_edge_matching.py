@@ -2,7 +2,7 @@ import numpy as np
 
 from src.core.protocols import CompatibilityMatcher
 from src.core.types import Piece, Side
-from src.edge_matching import ClassicalCompatibilityMatcher
+from src.edge_matching import ILLEGAL_COST, ClassicalCompatibilityMatcher
 
 
 def test_classical_matcher_protocol() -> None:
@@ -40,15 +40,15 @@ def test_tab_blank_finite():
     assert tensor.pair(0, 0, 1, 0) < np.inf
 
 
-def test_same_class_is_inf():
+def test_same_class_is_penalised():
     p0 = _make_piece(0, [np.ones(20)] * 4, ["tab"] * 4)
     p1 = _make_piece(1, [np.ones(20)] * 4, ["tab"] * 4)
     tensor = ClassicalCompatibilityMatcher().build([p0, p1])
-    assert tensor.pair(0, 0, 1, 0) == np.inf  # tab-tab
+    assert tensor.pair(0, 0, 1, 0) >= ILLEGAL_COST  # tab-tab
 
 
-def test_flat_sides_are_inf():
+def test_flat_sides_are_penalised():
     p0 = _make_piece(0, [np.zeros(20)] * 4, ["flat", "tab", "flat", "blank"])
     p1 = _make_piece(1, [np.zeros(20)] * 4, ["flat", "blank", "flat", "tab"])
     tensor = ClassicalCompatibilityMatcher().build([p0, p1])
-    assert tensor.pair(0, 0, 1, 0) == np.inf  # flat side
+    assert tensor.pair(0, 0, 1, 0) >= ILLEGAL_COST  # flat side

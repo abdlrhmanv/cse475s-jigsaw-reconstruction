@@ -41,6 +41,8 @@ def test_assembler_produces_grid():
     state = GreedyBestFirstAssembler(beam_k=1).assemble(pieces, tensor, 2, 2)
     assert len(state.grid) == 2
     assert len(state.grid[0]) == 2
+    placed = sum(1 for row in state.grid for cell in row if cell is not None)
+    assert placed == 4
 
 
 def test_assembler_empty():

@@ -102,25 +102,21 @@ class PieceExtractorImpl(PieceExtractor):
             y1p = min(y1 + self.pad, h - 1)
 
             crop_mask = blob[y0p : y1p + 1, x0p : x1p + 1].astype(np.uint8) * 255
-            if image.ndim == 3:
-                crop_img = image[y0p : y1p + 1, x0p : x1p + 1].copy()
-            else:
-                crop_img = image[y0p : y1p + 1, x0p : x1p + 1].copy()
+            crop_img = image[y0p : y1p + 1, x0p : x1p + 1].copy()
+            if crop_img.ndim == 3:
+                crop_img[crop_mask == 0] = 0
 
-            # Trace contour in crop coordinates
             contour = self.tracer.trace(crop_mask)
-
-            # PCA orientation from mask moments
             pca_theta = self._pca_angle(crop_mask)
 
             pieces.append(Piece(
-                id=int(lbl),
+                id=len(pieces),
                 image=crop_img,
                 mask=crop_mask,
                 contour=contour,
                 bbox=(x0p, y0p, x1p, y1p),
                 pca_theta=pca_theta,
-                corners=np.empty((4, 2)),  # filled by PieceDescriptor in Phase 3
+                corners=np.empty((4, 2)),
             ))
 
         return pieces

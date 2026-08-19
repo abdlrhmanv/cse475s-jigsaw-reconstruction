@@ -2,13 +2,23 @@
 # ws + wc should remain 1.0; retune on validation puzzles only.
 
 method: classical
+rows: 7   # 35-piece boards are 7×5; override per puzzle
+cols: 5
 filter:
   median_k: 3
   gaussian_k: 5
   gaussian_sigma: 1.0
 thresholder: otsu  # switch to adaptive under uneven illumination
+segmentation:
+  fill_holes: true
+  min_area: 2000          # drop dust; also scaled by min_area_frac × H × W
+  min_area_frac: 0.001
+  max_aspect: 5.0         # drop thin tools (Allen keys, strips)
+  min_solidity: 0.35      # drop spindly debris (area / bbox area)
+  close_k: 3              # small close; large kernels merge neighbouring pieces
+  keep_n: 35              # keep the 35 largest remaining blobs
 matching:
   ws: 0.3  # shape weight
   wc: 0.7  # colour weight (often higher on textured pieces)
 assembly:
-  beam_k: 3  # top-K alternatives per greedy step
+  beam_k: 8  # top-K alternatives per greedy step

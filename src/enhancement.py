@@ -200,6 +200,90 @@ class UnsharpMask(ImageFilter):
 
 
 # ---------------------------------------------------------------------------
+# Binary morphology
+# ---------------------------------------------------------------------------
+
+
+class BinaryCloser(ImageFilter):
+    """Morphological close (dilate then erode) with an odd square kernel.
+
+    Closes small cracks so hole-filling can treat printed texture as interior.
+    """
+
+    def __init__(self, k: int = 7) -> None:
+        if k % 2 == 0:
+            raise ValueError(f"k must be odd, got {k}")
+        self.k = k
+
+    def apply(self, image: np.ndarray) -> np.ndarray:
+        fg = (image if image.ndim == 2 else _ensure_gray(image)) > 0
+        pad = self.k // 2
+        dilated = self._dilate(fg, pad)
+        closed = self._erode(dilated, pad)
+        return closed.astype(np.float64) * 255.0
+
+    @staticmethod
+    def _dilate(fg: np.ndarray, pad: int) -> np.ndarray:
+        h, w = fg.shape
+        padded = np.pad(fg, pad, constant_values=False)
+        out = np.zeros_like(fg)
+        for i in range(2 * pad + 1):
+            for j in range(2 * pad + 1):
+                out |= padded[i : i + h, j : j + w]
+        return out
+
+    @staticmethod
+    def _erode(fg: np.ndarray, pad: int) -> np.ndarray:
+        h, w = fg.shape
+        padded = np.pad(fg, pad, constant_values=True)
+        out = np.ones_like(fg)
+        for i in range(2 * pad + 1):
+            for j in range(2 * pad + 1):
+                out &= padded[i : i + h, j : j + w]
+        return out
+
+
+class BinaryHoleFiller(ImageFilter):
+    """Fill enclosed 0-regions in a binary mask (texture holes inside pieces).
+
+    Flood-fills background from the image border; leftover background pixels
+    are holes and are set to 255. Does not use OpenCV morphology.
+    """
+
+    def apply(self, image: np.ndarray) -> np.ndarray:
+        from collections import deque
+
+        gray = image if image.ndim == 2 else _ensure_gray(image)
+        fg = gray > 0
+        h, w = fg.shape
+        reachable = np.zeros((h, w), dtype=bool)
+        q: deque[tuple[int, int]] = deque()
+
+        def try_seed(r: int, c: int) -> None:
+            if not fg[r, c] and not reachable[r, c]:
+                reachable[r, c] = True
+                q.append((r, c))
+
+        for r in range(h):
+            try_seed(r, 0)
+            try_seed(r, w - 1)
+        for c in range(w):
+            try_seed(0, c)
+            try_seed(h - 1, c)
+
+        while q:
+            r, c = q.popleft()
+            for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and not reachable[nr, nc] and not fg[nr, nc]:
+                    reachable[nr, nc] = True
+                    q.append((nr, nc))
+
+        filled = fg | ~reachable
+        return filled.astype(np.float64) * 255.0
+
+
+# ---------------------------------------------------------------------------
 # Composite
 # ---------------------------------------------------------------------------
 

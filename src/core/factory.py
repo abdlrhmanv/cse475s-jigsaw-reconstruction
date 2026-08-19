@@ -12,7 +12,14 @@ from src.contour_extraction import PieceExtractorImpl
 from src.core.convolution import ConvolutionEngine
 from src.core.viz import StageVisualizer
 from src.edge_matching import ClassicalCompatibilityMatcher
-from src.enhancement import ContrastStretcher, FilterChain, GaussianFilter, MedianFilter
+from src.enhancement import (
+    BinaryCloser,
+    BinaryHoleFiller,
+    ContrastStretcher,
+    FilterChain,
+    GaussianFilter,
+    MedianFilter,
+)
 from src.evaluation import ReconstructionEvaluator
 from src.piece_description import PieceDescriptorImpl
 from src.pipeline import ReconstructionPipeline
@@ -62,10 +69,25 @@ class PipelineFactory:
             raise ValueError(f"unknown method: {method}")
 
         beam_k = int(config.get("assembly", {}).get("beam_k", 3))
+        rows = int(config.get("rows", 3))
+        cols = int(config.get("cols", 3))
+        seg = config.get("segmentation", {})
+        keep_n = seg.get("keep_n", rows * cols)
         return ReconstructionPipeline(
             filters=chain,
             thresholder=thresholder,
-            labeler=ConnectedComponentLabeler(),
+            hole_filler=FilterChain(
+                [BinaryCloser(k=int(seg.get("close_k", 7))), BinaryHoleFiller()]
+            )
+            if seg.get("fill_holes", True)
+            else FilterChain([]),
+            labeler=ConnectedComponentLabeler(
+                min_area=int(seg.get("min_area", 2000)),
+                min_area_frac=float(seg.get("min_area_frac", 0.001)),
+                max_aspect=float(seg.get("max_aspect", 5.0)),
+                min_solidity=float(seg.get("min_solidity", 0.45)),
+                keep_n=int(keep_n) if keep_n is not None else None,
+            ),
             extractor=PieceExtractorImpl(),
             descriptor=PieceDescriptorImpl(),
             matcher=matcher,

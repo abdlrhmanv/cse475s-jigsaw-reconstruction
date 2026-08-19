@@ -1,11 +1,14 @@
+# Default classical pipeline. `--method` on the CLI overwrites `method`.
+# ws + wc should remain 1.0; retune on validation puzzles only.
+
 method: classical
 filter:
   median_k: 3
   gaussian_k: 5
   gaussian_sigma: 1.0
-thresholder: otsu
+thresholder: otsu  # switch to adaptive under uneven illumination
 matching:
-  ws: 0.3
-  wc: 0.7
+  ws: 0.3  # shape weight
+  wc: 0.7  # colour weight (often higher on textured pieces)
 assembly:
-  beam_k: 3
+  beam_k: 3  # top-K alternatives per greedy step

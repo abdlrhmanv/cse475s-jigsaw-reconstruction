@@ -7,8 +7,11 @@ __pycache__/
 .DS_Store
 *.pt
 *.pth
+!checkpoints/*.pt
+!checkpoints/**/*.pt
 
 *.md
 !README.md
 !data/README.md
 Project Description.pdf
+!report/*.pdf

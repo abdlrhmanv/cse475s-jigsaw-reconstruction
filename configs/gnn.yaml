@@ -1,7 +1,8 @@
-# GNN matching: same extraction/assembly as classical.
-# Train first: python main.py train-gnn --epochs 40
+# Weak extra matcher (real val_ap ~0.26). Prefer Siamese for ML matching.
+# Train first: python main.py train-gnn --real --max-boards 40
 
 method: gnn
+infer_grid: true
 rows: 7
 cols: 5
 filter:
@@ -15,11 +16,13 @@ segmentation:
   min_area_frac: 0.001
   max_aspect: 5.0
   min_solidity: 0.35
+  min_rel_area: 0.40
+  max_area_frac: 0.25
   close_k: 3
-  keep_n: 35
-  use_gt_boxes: true
+  keep_n: null            # runtime: unique YOLO class count when labels exist
+  use_gt_boxes: false
 matching:
   weights: checkpoints/gnn.pt
-  top_k: 8
+  top_k: 8  # match training graph sparsity (top_k=8)
 assembly:
   beam_k: 8

@@ -7,9 +7,9 @@ data/
 ├── data.yaml              # class names (piece IDs 1–35) and split paths
 ├── splits.json            # frozen stem lists (do not edit by hand)
 ├── input/                 # scrambled puzzle images (model input)
-│   ├── train/             # 4613 images — singles + most multi-piece boards
-│   ├── val/               # 35 multi-piece boards (9–35 pieces)
-│   └── test/              # 36 multi-piece boards (9–35 pieces); never train on these
+│   ├── train/             # 4555 images — singles + most multi-piece boards
+│   ├── val/               # 68 images (multi-piece sources + their Roboflow variants)
+│   └── test/              # 61 images; never train on these
 ├── ground_truth/          # labels, same filename stem as the image
 │   ├── train/
 │   ├── val/
@@ -21,7 +21,7 @@ data/
 
 **Label format:** YOLO line `class cx cy w h` (normalized 0–1). `class` is the piece identity (`1`–`35` in `data.yaml`). These are piece boxes, not a finished assembled grid.
 
-**Split rule:** val and test contain only reconstruction boards (at least 9 unique pieces). Isolated 1-piece photos stay in train. Frozen in `splits.json`; do not mix a test image into training.
+**Split rule:** Roboflow variants of the same photo (`name.rf.*`) stay in one split. A source is reconstruction-eligible if any variant has at least 9 unique pieces; those sources are split 80/10/10. Pure 1-piece sources stay in train. Frozen in `splits.json`; do not mix a test image into training.
 
 **CLI:** pass a board from `data/input/test/` (or train/val during development):
 

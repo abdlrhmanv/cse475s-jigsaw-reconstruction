@@ -16,11 +16,7 @@ def _ensure_float(image: np.ndarray) -> np.ndarray:
     return image.astype(np.float64) if image.dtype != np.float64 else image
 
 
-def _ensure_gray(image: np.ndarray) -> np.ndarray:
-    """Convert to single-channel if needed (luminance weights)."""
-    if image.ndim == 2:
-        return image
-    return 0.2989 * image[:, :, 0] + 0.5870 * image[:, :, 1] + 0.1140 * image[:, :, 2]
+from src.core.image_utils import _ensure_gray as _ensure_gray  # noqa: F811 — canonical home is core
 
 
 def _to_uint8(image: np.ndarray) -> np.ndarray:
@@ -62,6 +58,8 @@ class GaussianFilter(ImageFilter):
             raise ValueError(f"k must be odd, got {k}")
         self.k = k
         self.sigma = sigma if sigma is not None else 0.3 * ((k - 1) / 2 - 1) + 0.8
+        if self.sigma <= 0:
+            raise ValueError(f"sigma must be > 0, got {self.sigma}")
         self.engine = engine or ConvolutionEngine()
 
     def kernel(self) -> np.ndarray:
@@ -86,7 +84,8 @@ class MedianFilter(ImageFilter):
 
     Unlike mean/Gaussian, median is **non-linear** — it cannot be expressed as a
     kernel inner-product, so convolution cannot implement it. A per-pixel loop
-    over the sorted window is the correct (and course-required) approach.
+    over the sorted window is the course-required approach (not OpenCV). On this
+    photo set that is ~17 s per board; accepted for the submission.
     """
 
     def __init__(self, k: int) -> None:
@@ -104,6 +103,12 @@ class MedianFilter(ImageFilter):
         return self._apply_2d(img)
 
     def _apply_2d(self, img: np.ndarray) -> np.ndarray:
+        if img.dtype == np.uint8 or (np.issubdtype(img.dtype, np.floating) and float(img.min()) >= 0 and float(img.max()) <= 255):
+            return self._apply_2d_hist(np.clip(img, 0, 255).astype(np.uint8)).astype(img.dtype)
+        return self._apply_2d_sort(img)
+
+    def _apply_2d_sort(self, img: np.ndarray) -> np.ndarray:
+        """General fallback: sort-based median."""
         h, w = img.shape
         pad = self.k // 2
         padded = np.pad(img, pad, mode="reflect")
@@ -115,6 +120,36 @@ class MedianFilter(ImageFilter):
                 window.sort()
                 out[r, c] = window[mid]
         return out
+
+    def _apply_2d_hist(self, img: np.ndarray) -> np.ndarray:
+        """O(H*W*k) histogram-median for uint8 images."""
+        h, w = img.shape
+        pad = self.k // 2
+        padded = np.pad(img, pad, mode="reflect")
+        out = np.empty_like(img)
+        mid = (self.k * self.k) // 2
+        hist = np.zeros(256, dtype=np.int32)
+        for r in range(h):
+            hist[:] = 0
+            for dr in range(self.k):
+                for dc in range(self.k):
+                    hist[padded[r + dr, dc]] += 1
+            out[r, 0] = self._median_from_hist(hist, mid)
+            for c in range(1, w):
+                for dr in range(self.k):
+                    hist[padded[r + dr, c - 1]] -= 1
+                    hist[padded[r + dr, c + self.k - 1]] += 1
+                out[r, c] = self._median_from_hist(hist, mid)
+        return out
+
+    @staticmethod
+    def _median_from_hist(hist: np.ndarray, mid: int) -> int:
+        count = 0
+        for v in range(256):
+            count += hist[v]
+            if count > mid:
+                return v
+        return 255
 
 
 # ---------------------------------------------------------------------------

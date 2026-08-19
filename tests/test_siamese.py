@@ -7,7 +7,8 @@ from src.core.ribbons import pack_ribbon
 from src.core.types import Piece, Side
 from src.ml.siamese import SiameseNet
 from src.ml.siamese_matcher import SiameseCompatibilityMatcher
-from src.ml.train_siamese import make_synthetic_pairs
+from src.ml.train_siamese import make_synthetic_pairs, side_pairs_to_tensors
+from src.ml.train_metrics import average_precision, binary_pr_metrics
 from src.piece_description import PieceDescriptorImpl
 
 
@@ -84,11 +85,16 @@ def _piece(pid: int) -> Piece:
 
 def test_siamese_matcher_protocol_and_tensor() -> None:
     assert issubclass(SiameseCompatibilityMatcher, CompatibilityMatcher)
-    matcher = SiameseCompatibilityMatcher(weights=None, device="cpu")
+    matcher = SiameseCompatibilityMatcher(weights=None, device="cpu", require_weights=False)
     tensor = matcher.build([_piece(0), _piece(1)])
     assert tensor.dissim.shape == (2, 4, 2, 4)
     assert np.isfinite(tensor.pair(0, 0, 1, 1))  # tab-blank
     assert tensor.pair(0, 0, 0, 1) == np.inf     # self
+
+
+def test_siamese_missing_checkpoint_fails():
+    with pytest.raises(FileNotFoundError, match="Missing Siamese checkpoint"):
+        SiameseCompatibilityMatcher(weights="checkpoints/does_not_exist.pt", device="cpu")
 
 
 def test_synthetic_pairs_balanced() -> None:
@@ -97,3 +103,46 @@ def test_synthetic_pairs_balanced() -> None:
     assert labels.count(1) == 10
     assert labels.count(0) == 30
     assert pairs[0][0].shape == (4, 32)
+
+
+def test_side_pairs_label_relative_ori() -> None:
+    from src.ml.pair_dataset import SidePair
+
+    pos = SidePair(
+        ribbon_a=np.zeros((4, 32), dtype=np.float32),
+        ribbon_b=np.zeros((4, 32), dtype=np.float32),
+        profile_a=np.ones(8),
+        profile_b=np.ones(8),
+        label=1,
+        piece_id_a=0,
+        side_idx_a=1,
+        piece_id_b=1,
+        side_idx_b=3,
+        rel_orient=2,
+    )
+    neg = SidePair(
+        ribbon_a=np.zeros((4, 32), dtype=np.float32),
+        ribbon_b=np.zeros((4, 32), dtype=np.float32),
+        profile_a=np.ones(8),
+        profile_b=np.ones(8),
+        label=0,
+        piece_id_a=0,
+        side_idx_a=1,
+        piece_id_b=2,
+        side_idx_b=0,
+        rel_orient=-1,
+    )
+    tensors = side_pairs_to_tensors([pos, neg], rot_known=True)
+    assert tensors[0][2] == 1 and tensors[0][3] == 2
+    assert tensors[1][2] == 0 and tensors[1][3] == 0
+    skipped = side_pairs_to_tensors([pos], rot_known=False)
+    assert skipped[0][3] == -1
+
+
+def test_average_precision_perfect_and_random() -> None:
+    y = np.array([1, 1, 0, 0], dtype=np.float64)
+    assert average_precision(np.array([0.9, 0.8, 0.2, 0.1]), y) > 0.99
+    metrics = binary_pr_metrics(np.array([0.2, 0.2, 0.2, 0.2]), y)
+    assert metrics["f1"] == 0.0
+    assert metrics["p_pos"] == pytest.approx(0.2)
+    assert metrics["p_neg"] == pytest.approx(0.2)

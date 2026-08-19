@@ -41,7 +41,8 @@ class StageVisualizer:
 
     def save_hist(self, path: str | Path, image: np.ndarray, title: str = "") -> None:
         """Save a greyscale histogram figure."""
-        from src.enhancement import HistogramComputer, _ensure_gray
+        from src.core.image_utils import _ensure_gray
+        from src.enhancement import HistogramComputer
         gray = _ensure_gray(image) if image.ndim == 3 else image
         hist = HistogramComputer().compute(np.clip(gray, 0, 255).astype(np.uint8))
         fig, ax = plt.subplots(figsize=(6, 3))

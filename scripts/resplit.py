@@ -2,10 +2,11 @@
 
 Rule
 ----
-- Images with >= MIN_PIECES unique labelled pieces are the reconstruction pool.
-  They are split 80/10/10, stratified by piece-count bucket (9–15 / 16–21 / 35).
-- All remaining images (0–8 pieces, mostly isolated singles) stay in train.
-  They are useful for detection/enhancement, not for reconstruction eval.
+- Group every Roboflow variant (`name.rf.*`) by source prefix.
+- If any file of a source has >= MIN_PIECES unique labelled pieces, the whole
+  source is reconstruction-eligible and is split 80/10/10, stratified by that
+  source's max piece-count bucket (9–15 / 16–21 / 35).
+- Sources that are only singles stay in train.
 
 Usage
 -----
@@ -19,8 +20,13 @@ import argparse
 import shutil
 from collections import defaultdict
 from pathlib import Path
+import sys
 
 import numpy as np
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 MIN_PIECES = 9
 SEED = 42
@@ -64,34 +70,57 @@ def bucket(n: int) -> str:
     return "small"
 
 
-def assign_multi(items: list[tuple[Path, Path | None, int]], rng: np.random.Generator) -> dict[str, str]:
-    """Map image stem → split, stratified by piece-count bucket."""
-    by_bucket: dict[str, list[str]] = defaultdict(list)
-    for img, _, n in items:
-        by_bucket[bucket(n)].append(img.stem)
+def assign_by_source(
+    rows: list[tuple[Path, Path | None, int]],
+    rng: np.random.Generator,
+) -> dict[str, str]:
+    """Map image stem → split. Every Roboflow variant of one photo stays together.
 
+    A source is reconstruction-eligible if any of its files has >= MIN_PIECES
+    unique labels. Those sources are split 80/10/10 by max piece-count bucket.
+    Sources that are only singles all go to train. This prevents a 1-piece
+    augmentation landing in train while a 9-piece sibling sits in val/test.
+    """
+    from src.ml.splits import source_stem
+
+    groups: dict[str, list[str]] = defaultdict(list)
+    max_n: dict[str, int] = {}
+    for img, _, n in rows:
+        src = source_stem(img.stem)
+        groups[src].append(img.stem)
+        max_n[src] = max(max_n.get(src, 0), n)
+
+    by_bucket: dict[str, list[str]] = defaultdict(list)
     assignment: dict[str, str] = {}
-    for names in by_bucket.values():
-        names = list(names)
-        rng.shuffle(names)
-        n = len(names)
+    for src, pieces in max_n.items():
+        if pieces >= MIN_PIECES:
+            by_bucket[bucket(pieces)].append(src)
+        else:
+            for stem in groups[src]:
+                assignment[stem] = "train"
+
+    for sources in by_bucket.values():
+        sources = list(sources)
+        rng.shuffle(sources)
+        n = len(sources)
         n_train = int(round(n * TRAIN_FRAC))
         n_val = int(round(n * VAL_FRAC))
         n_test = n - n_train - n_val
-        # Keep at least one image in val and test when the bucket is large enough.
         if n >= 3 and n_test == 0:
             n_test = 1
             n_train -= 1
         if n >= 3 and n_val == 0:
             n_val = 1
             n_train -= 1
-        for i, stem in enumerate(names):
+        for i, src in enumerate(sources):
             if i < n_train:
-                assignment[stem] = "train"
+                split = "train"
             elif i < n_train + n_val:
-                assignment[stem] = "val"
+                split = "val"
             else:
-                assignment[stem] = "test"
+                split = "test"
+            for stem in groups[src]:
+                assignment[stem] = split
     return assignment
 
 
@@ -115,17 +144,16 @@ def main() -> None:
 
     data_dir = Path(args.data_dir)
     rows = collect_files(data_dir)
-    multi = [r for r in rows if r[2] >= MIN_PIECES]
-    singles = [r for r in rows if r[2] < MIN_PIECES]
 
     rng = np.random.default_rng(SEED)
-    multi_assign = assign_multi(multi, rng)
+    stem_split = assign_by_source(rows, rng)
 
     plan: dict[str, list[tuple[Path, Path | None, int]]] = {"train": [], "val": [], "test": []}
-    for img, lbl, n in singles:
-        plan["train"].append((img, lbl, n))
-    for img, lbl, n in multi:
-        plan[multi_assign[img.stem]].append((img, lbl, n))
+    missing = [img.stem for img, _, _ in rows if img.stem not in stem_split]
+    if missing:
+        raise SystemExit(f"Unassigned stems: {missing[:5]}")
+    for img, lbl, n in rows:
+        plan[stem_split[img.stem]].append((img, lbl, n))
 
     for split in ("train", "val", "test"):
         items = plan[split]
@@ -152,6 +180,8 @@ def main() -> None:
 
     splits = freeze_splits(data_dir)
     check_no_leakage(splits)
+    from src.ml.splits import check_no_source_leakage
+    check_no_source_leakage(splits)
     print(
         f"\nDone. splits.json: train={len(splits['train'])} "
         f"val={len(splits['val'])} test={len(splits['test'])}"

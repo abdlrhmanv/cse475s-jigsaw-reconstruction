@@ -7,10 +7,32 @@ import numpy as np
 from src.core.protocols import Labeler
 
 
+def orient_foreground(gray: np.ndarray, binary: np.ndarray) -> np.ndarray:
+    """Make pieces the foreground (255) after a global/Otsu threshold.
+
+    Table photos are mostly background. If the bright class occupies more than
+    half the pixels it is the table, so invert. Matches the polarity check
+    already used inside YOLO box crops.
+    """
+    fg = binary > 0
+    if fg.size == 0:
+        return binary
+    frac = float(fg.mean())
+    if frac > 0.55:
+        return np.where(fg, 0.0, 255.0)
+    if np.any(fg) and np.any(~fg):
+        fg_mean = float(np.mean(gray[fg]))
+        bg_mean = float(np.mean(gray[~fg]))
+        if fg_mean > bg_mean and frac > 0.35:
+            return np.where(fg, 0.0, 255.0)
+    return binary.astype(np.float64, copy=False)
+
+
 class ConnectedComponentLabeler(Labeler):
     """Two-pass 8-connected CCL with union-find path compression.
 
     Filters labels by min_area / max_area, bbox aspect ratio (thin tools),
+    relative area vs the median blob, max fraction of the frame (table),
     and optionally keeps only the `keep_n` largest blobs.
     """
 
@@ -22,6 +44,8 @@ class ConnectedComponentLabeler(Labeler):
         max_aspect: float | None = None,
         keep_n: int | None = None,
         min_solidity: float = 0.0,
+        min_rel_area: float = 0.0,
+        max_area_frac: float | None = None,
     ) -> None:
         self.min_area = min_area
         self.max_area = max_area
@@ -29,8 +53,10 @@ class ConnectedComponentLabeler(Labeler):
         self.max_aspect = max_aspect
         self.keep_n = keep_n
         self.min_solidity = min_solidity
+        self.min_rel_area = min_rel_area
+        self.max_area_frac = max_area_frac
 
-    def label(self, binary: np.ndarray) -> np.ndarray:
+    def label(self, binary: np.ndarray, keep_n: int | None = None) -> np.ndarray:
         fg = binary > 0
         h, w = fg.shape
         labels = np.zeros((h, w), dtype=np.int32)
@@ -86,14 +112,18 @@ class ConnectedComponentLabeler(Labeler):
                     remap[root] = canonical
                 labels[r, c] = remap[root]
 
-        labels = self._filter_blobs(labels)
+        labels = self._filter_blobs(labels, keep_n=self.keep_n if keep_n is None else keep_n)
         return labels
 
-    def _filter_blobs(self, labels: np.ndarray) -> np.ndarray:
+    def _filter_blobs(self, labels: np.ndarray, keep_n: int | None = None) -> np.ndarray:
         h, w = labels.shape
         min_area = self.min_area
         if self.min_area_frac > 0:
             min_area = max(min_area, int(self.min_area_frac * h * w))
+        max_area = self.max_area
+        if self.max_area_frac is not None and self.max_area_frac > 0:
+            cap = int(self.max_area_frac * h * w)
+            max_area = cap if max_area is None else min(max_area, cap)
 
         counts = np.bincount(labels.ravel())
         drop: set[int] = set()
@@ -106,7 +136,7 @@ class ConnectedComponentLabeler(Labeler):
             if area < min_area:
                 drop.add(lbl)
                 continue
-            if self.max_area is not None and area > self.max_area:
+            if max_area is not None and area > max_area:
                 drop.add(lbl)
                 continue
             if self.max_aspect is not None:
@@ -132,9 +162,21 @@ class ConnectedComponentLabeler(Labeler):
                     continue
             areas.append((area, lbl))
 
-        if self.keep_n is not None and len(areas) > self.keep_n:
+        if self.min_rel_area > 0 and len(areas) >= 2:
+            median_area = float(np.median([a for a, _ in areas]))
+            cutoff = self.min_rel_area * median_area
+            kept: list[tuple[int, int]] = []
+            for area, lbl in areas:
+                if area < cutoff:
+                    drop.add(lbl)
+                else:
+                    kept.append((area, lbl))
+            areas = kept
+
+        n_keep = keep_n if keep_n is not None else self.keep_n
+        if n_keep is not None and len(areas) > n_keep:
             areas.sort(reverse=True)
-            for _, lbl in areas[self.keep_n :]:
+            for _, lbl in areas[n_keep:]:
                 drop.add(lbl)
 
         if drop:

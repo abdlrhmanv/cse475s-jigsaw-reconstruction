@@ -8,6 +8,7 @@ from src.piece_description import (
     PieceDescriptorImpl,
     _classify_side,
     _signed_profile,
+    flat_frame_rotation,
 )
 
 
@@ -123,4 +124,47 @@ def test_deskew_uprights_tilted_rectangle():
     height = ys.max() - ys.min()
     # Axis-aligned 30×40 rectangle: aspect closer to 30/40 than to a diamond.
     assert min(width, height) / max(width, height) < 0.85
+
+
+def test_flat_frame_rotation_corner_and_edge():
+    from src.core.types import Side
+
+    def sides(*classes: str):
+        return [
+            Side(
+                index=i,
+                cls=cls,  # type: ignore[arg-type]
+                profile=np.zeros(4),
+                colour=np.zeros((2, 3)),
+                ribbon=np.empty(0),
+                contour_pts=np.zeros((2, 2)),
+            )
+            for i, cls in enumerate(classes)
+        ]
+
+    assert flat_frame_rotation(sides("flat", "tab", "blank", "flat")) == 0
+    assert flat_frame_rotation(sides("flat", "flat", "tab", "blank")) == 3
+    assert flat_frame_rotation(sides("tab", "flat", "blank", "tab")) == 1
+    assert flat_frame_rotation(sides("tab", "blank", "tab", "blank")) == 0
+
+
+def test_rotate_piece_cw_moves_top_to_right():
+    from src.contour_extraction import rotate_piece_cw
+
+    img = np.zeros((10, 20, 3), dtype=np.uint8)
+    img[0, :, 0] = 255
+    mask = np.ones((10, 20), dtype=np.uint8) * 255
+    piece = Piece(
+        id=0,
+        image=img,
+        mask=mask,
+        contour=np.zeros((4, 2), dtype=np.int32),
+        bbox=(0, 0, 20, 10),
+        pca_theta=0.0,
+        corners=np.empty((4, 2)),
+    )
+    out = rotate_piece_cw(piece, 1)
+    xs = np.where(out.image[:, :, 0] > 128)[1]
+    assert out.image.shape[0] == 20 and out.image.shape[1] == 10
+    assert float(xs.mean()) > out.image.shape[1] * 0.5
 

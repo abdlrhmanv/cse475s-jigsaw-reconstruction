@@ -57,13 +57,15 @@ class SageLayer(nn.Module):
 class PuzzleGNN(nn.Module):
     """Encode ribbons → 2 Sage layers → inter-edge neighbour probability."""
 
-    def __init__(self, in_ch: int = 4, dim: int = 64, n_layers: int = 2) -> None:
+    def __init__(self, in_ch: int = 4, dim: int = 64, n_layers: int = 3, dropout: float = 0.15) -> None:
         super().__init__()
         self.encoder = RibbonEncoder(in_ch=in_ch, emb=dim)
         self.layers = nn.ModuleList([SageLayer(dim) for _ in range(n_layers)])
+        self.drop = nn.Dropout(dropout)
         self.edge_mlp = nn.Sequential(
             nn.Linear(dim * 3 + 1, dim),
             nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
             nn.Linear(dim, 1),
         )
 
@@ -78,7 +80,7 @@ class PuzzleGNN(nn.Module):
         edge_type: torch.Tensor,
     ) -> torch.Tensor:
         for layer in self.layers:
-            h = layer(h, src, dst, edge_type)
+            h = self.drop(layer(h, src, dst, edge_type))
         return h
 
     def edge_prob(

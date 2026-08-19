@@ -1,0 +1,5 @@
+{
+  "method": "gnn",
+  "weights": "checkpoints/gnn.pt",
+  "checkpoints_dir": "checkpoints"
+}

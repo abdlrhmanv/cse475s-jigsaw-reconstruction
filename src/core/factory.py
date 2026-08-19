@@ -3,6 +3,7 @@
 This is the only module allowed to import concrete operators (DIP). `main.py`
 and tests must not construct Sobel/Canny/GNN directly. `--method` swaps the
 matcher only; piece extraction stays shared so M1 vs M2 is a fair comparison.
+Siamese is the ML matcher; GNN is a weak extra (real val_ap ~0.26).
 """
 
 from __future__ import annotations
@@ -73,16 +74,14 @@ class PipelineFactory:
             from src.ml.gnn_matcher import GNNCompatibilityMatcher
             matcher = GNNCompatibilityMatcher(
                 weights=matching.get("weights", "checkpoints/gnn.pt"),
-                top_k=int(matching.get("top_k", 8)),
+                top_k=int(matching.get("top_k", 0)),
             )
         else:
             raise ValueError(f"unknown method: {method}")
 
         beam_k = int(config.get("assembly", {}).get("beam_k", 3))
-        rows = int(config.get("rows", 3))
-        cols = int(config.get("cols", 3))
         seg = config.get("segmentation", {})
-        keep_n = seg.get("keep_n", rows * cols)
+        keep_n = seg.get("keep_n")
         return ReconstructionPipeline(
             filters=chain,
             thresholder=thresholder,
@@ -96,6 +95,8 @@ class PipelineFactory:
                 min_area_frac=float(seg.get("min_area_frac", 0.001)),
                 max_aspect=float(seg.get("max_aspect", 5.0)),
                 min_solidity=float(seg.get("min_solidity", 0.45)),
+                min_rel_area=float(seg.get("min_rel_area", 0.40)),
+                max_area_frac=float(seg.get("max_area_frac", 0.25)),
                 keep_n=int(keep_n) if keep_n is not None else None,
             ),
             extractor=PieceExtractorImpl(),

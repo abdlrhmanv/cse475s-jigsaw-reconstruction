@@ -45,10 +45,21 @@ def test_same_class_is_penalised():
     p1 = _make_piece(1, [np.ones(20)] * 4, ["tab"] * 4)
     tensor = ClassicalCompatibilityMatcher().build([p0, p1])
     assert tensor.pair(0, 0, 1, 0) >= ILLEGAL_COST  # tab-tab
+    assert np.isinf(tensor.pair(0, 0, 1, 0))
 
 
 def test_flat_sides_are_penalised():
     p0 = _make_piece(0, [np.zeros(20)] * 4, ["flat", "tab", "flat", "blank"])
     p1 = _make_piece(1, [np.zeros(20)] * 4, ["flat", "blank", "flat", "tab"])
     tensor = ClassicalCompatibilityMatcher().build([p0, p1])
-    assert tensor.pair(0, 0, 1, 0) >= ILLEGAL_COST  # flat side
+    assert np.isinf(tensor.pair(0, 0, 1, 0))  # flat side
+
+
+def test_missing_colour_is_not_perfect():
+    nan_strip = np.full((32, 3), np.nan)
+    p0 = _make_piece(0, [np.ones(20)] * 4, ["tab", "blank", "tab", "blank"])
+    p1 = _make_piece(1, [-np.ones(20)] * 4, ["blank", "tab", "blank", "tab"])
+    p0.sides[0].colour = nan_strip
+    p1.sides[0].colour = nan_strip
+    tensor = ClassicalCompatibilityMatcher().build([p0, p1])
+    assert np.isinf(tensor.pair(0, 0, 1, 0))

@@ -15,6 +15,7 @@ import numpy as np
 
 from src.core.types import Piece, Side
 from src.ml.augmentation import RibbonAugmenter
+from src.ml.pose_gt import relative_orient
 
 
 @dataclass
@@ -29,6 +30,7 @@ class SidePair:
     side_idx_a: int
     piece_id_b: int
     side_idx_b: int
+    rel_orient: int = -1  # (si − sj) mod 4 on positives; −1 on negatives
 
 
 class PairGenerator:
@@ -48,7 +50,7 @@ class PairGenerator:
     ) -> None:
         self.neg_ratio = neg_ratio
         self.augmenter = augmenter
-        self.rng = rng or np.random.default_rng()
+        self.rng = rng or np.random.default_rng(42)
 
     def generate(
         self,
@@ -94,6 +96,7 @@ class PairGenerator:
                 label=1,
                 piece_id_a=pid_a, side_idx_a=si_a,
                 piece_id_b=pid_b, side_idx_b=si_b,
+                rel_orient=relative_orient(si_a, si_b),
             ))
 
         # Negative pairs: sample random non-adjacent side combos

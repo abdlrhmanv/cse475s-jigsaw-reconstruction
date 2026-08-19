@@ -51,7 +51,8 @@ class ConvolutionEngine:
         kernel: np.ndarray,
         padding: str,
     ) -> np.ndarray:
-        """Core 2-D correlation (no flip — caller supplies pre-built kernels that are symmetric)."""
+        """Core 2-D convolution: flip the kernel then slide (correlation with flipped kernel)."""
+        kernel = kernel[::-1, ::-1]
         img = image.astype(np.float64)
         kh, kw = kernel.shape
         ph, pw = kh // 2, kw // 2

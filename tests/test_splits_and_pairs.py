@@ -8,7 +8,7 @@ import pytest
 from src.core.types import Piece, Side
 from src.ml.augmentation import RibbonAugmenter
 from src.ml.pair_dataset import PairGenerator, SidePair
-from src.ml.splits import check_no_leakage, freeze_splits, load_splits
+from src.ml.splits import check_no_leakage, check_no_source_leakage, freeze_splits, load_splits
 
 
 # -- Splits ------------------------------------------------------------------
@@ -54,6 +54,31 @@ def test_real_data_no_leakage():
 
     splits = load_splits(splits_path)
     check_no_leakage(splits)
+
+
+def test_real_data_no_source_leakage():
+    splits_path = Path("data/splits.json")
+    if not splits_path.exists():
+        pytest.skip("No splits.json")
+    check_no_source_leakage(load_splits(splits_path))
+
+
+def test_source_leakage_detected():
+    splits = {
+        "train": ["4-3_jpg.rf.aaa"],
+        "val": ["other.rf.bbb"],
+        "test": ["4-3_jpg.rf.ccc"],
+    }
+    with pytest.raises(ValueError, match="Source leakage"):
+        check_no_source_leakage(splits)
+
+
+def test_source_leakage_clean():
+    check_no_source_leakage({
+        "train": ["a.rf.1"],
+        "val": ["b.rf.2"],
+        "test": ["c.rf.3"],
+    })
 
 
 # -- Augmentation ------------------------------------------------------------
@@ -112,6 +137,7 @@ def test_pair_generator_counts():
     negatives = [p for p in pairs if p.label == 0]
     assert len(positives) == 2
     assert len(negatives) == 4  # 2 * neg_ratio
+    assert positives[0].rel_orient == (positives[0].side_idx_a - positives[0].side_idx_b) % 4
 
 
 def test_pair_generator_with_augment():

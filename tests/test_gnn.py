@@ -40,7 +40,7 @@ def test_gnn_forward_shapes():
 def test_gnn_matcher_protocol():
     assert issubclass(GNNCompatibilityMatcher, CompatibilityMatcher)
     pieces, _ = make_synthetic_grid(2, 2, rng=np.random.default_rng(3))
-    tensor = GNNCompatibilityMatcher(weights=None, device="cpu", top_k=4).build(pieces)
+    tensor = GNNCompatibilityMatcher(weights=None, device="cpu", top_k=4, require_weights=False).build(pieces)
     assert tensor.dissim.shape == (4, 4, 4, 4)
     # some inter pair should be finite
     finite = np.isfinite(tensor.dissim)

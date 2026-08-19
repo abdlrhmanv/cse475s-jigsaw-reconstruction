@@ -1,7 +1,8 @@
-# Siamese matching reuses the same extraction/assembly as classical.
-# Train first: python main.py train-siamese --epochs 20
+# Primary ML matcher. Train first: python main.py train-siamese --real --max-boards 80
+# GNN is a weak extra (real val_ap ~0.26); prefer this checkpoint for --method siamese.
 
 method: siamese
+infer_grid: true
 rows: 7
 cols: 5
 filter:
@@ -15,9 +16,11 @@ segmentation:
   min_area_frac: 0.001
   max_aspect: 5.0
   min_solidity: 0.35
+  min_rel_area: 0.40
+  max_area_frac: 0.25
   close_k: 3
-  keep_n: 35
-  use_gt_boxes: true
+  keep_n: null            # runtime: unique YOLO class count when labels exist
+  use_gt_boxes: false
 matching:
   weights: checkpoints/siamese.pt
 assembly:

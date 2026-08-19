@@ -27,8 +27,10 @@ class SideGraph:
 
 def _ribbon(side) -> np.ndarray:
     if side.ribbon is not None and getattr(side.ribbon, "ndim", 0) == 2 and side.ribbon.shape[0] == 4:
-        return side.ribbon.astype(np.float32)
-    return pack_ribbon(side.colour, side.profile)
+        out = side.ribbon.astype(np.float32)
+    else:
+        out = pack_ribbon(side.colour, side.profile)
+    return np.nan_to_num(out, nan=0.0)
 
 
 def _colour_ssd(a: np.ndarray, b: np.ndarray) -> float:
@@ -84,7 +86,7 @@ def build_side_graph(
                 pos_set.add((pi * 4 + si, pj * 4 + sj))
                 pos_set.add((pj * 4 + sj, pi * 4 + si))
 
-    # Inter-piece candidates: for each side, top-K other sides by colour SSD
+    # Inter-piece candidates: all class-legal pairs (top_k<=0) or colour top-K
     for i in range(n):
         for si in range(4):
             u = i * 4 + si
@@ -102,7 +104,8 @@ def build_side_graph(
                     sb = pieces[j].sides[sj].colour if sj < len(pieces[j].sides) else np.zeros((1, 3))
                     scored.append((_colour_ssd(sa, sb), v))
             scored.sort()
-            for _, v in scored[:top_k]:
+            chosen = scored if top_k is None or top_k <= 0 else scored[:top_k]
+            for _, v in chosen:
                 src.append(u)
                 dst.append(v)
                 etype.append(1)

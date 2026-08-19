@@ -1,0 +1,47 @@
+[
+  {
+    "method": "classical",
+    "n_boards": 6,
+    "orientation_accuracy": null,
+    "Q": 0.0513,
+    "geometry_Q": 0.2,
+    "position_accuracy": null,
+    "neighbour_accuracy": 0.2564,
+    "identity_neighbour_accuracy": 0.2564,
+    "complete_reconstruction": 0.0,
+    "runtime_s": 17.235,
+    "n_placed": 14.6667,
+    "n_labelled": null,
+    "n_pieces": 14.6667
+  },
+  {
+    "method": "gnn",
+    "n_boards": 6,
+    "orientation_accuracy": null,
+    "Q": 0.0612,
+    "geometry_Q": 0.2,
+    "position_accuracy": null,
+    "neighbour_accuracy": 0.306,
+    "identity_neighbour_accuracy": 0.306,
+    "complete_reconstruction": 0.0,
+    "runtime_s": 17.1433,
+    "n_placed": 14.3333,
+    "n_labelled": null,
+    "n_pieces": 14.6667
+  },
+  {
+    "method": "siamese",
+    "n_boards": 6,
+    "orientation_accuracy": null,
+    "Q": 0.0582,
+    "geometry_Q": 0.2,
+    "position_accuracy": null,
+    "neighbour_accuracy": 0.2908,
+    "identity_neighbour_accuracy": 0.2908,
+    "complete_reconstruction": 0.0,
+    "runtime_s": 17.0935,
+    "n_placed": 14.3333,
+    "n_labelled": null,
+    "n_pieces": 14.6667
+  }
+]

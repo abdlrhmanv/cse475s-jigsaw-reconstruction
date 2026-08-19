@@ -9,7 +9,8 @@ from src.contour_extraction import (
     YoloBoxExtractor,
     gt_label_path,
 )
-from src.segmentation import ConnectedComponentLabeler
+from src.core.grid import infer_board_shape
+from src.segmentation import ConnectedComponentLabeler, orient_foreground
 
 
 def test_ccl_is_labeler() -> None:
@@ -60,6 +61,36 @@ def test_ccl_keep_n_largest():
     labels = ConnectedComponentLabeler(min_area=1, keep_n=2).label(binary)
     unique = set(np.unique(labels)) - {0}
     assert len(unique) == 2
+
+
+def test_ccl_keep_n_override_on_call():
+    binary = np.zeros((40, 80), dtype=np.float64)
+    binary[2:12, 2:12] = 255
+    binary[2:10, 30:38] = 255
+    binary[2:6, 50:54] = 255
+    labels = ConnectedComponentLabeler(min_area=1).label(binary, keep_n=2)
+    unique = set(np.unique(labels)) - {0}
+    assert len(unique) == 2
+
+
+def test_ccl_drops_relative_small_blob():
+    binary = np.zeros((40, 80), dtype=np.float64)
+    binary[2:12, 2:12] = 255       # 100
+    binary[2:12, 20:30] = 255      # 100
+    binary[2:6, 50:54] = 255       # 16
+    labels = ConnectedComponentLabeler(min_area=1, min_rel_area=0.4).label(binary)
+    unique = set(np.unique(labels)) - {0}
+    assert len(unique) == 2
+
+
+def test_ccl_drops_huge_table_blob():
+    binary = np.zeros((40, 40), dtype=np.float64)
+    binary[0:35, 0:35] = 255       # 1225 px table remnant
+    binary[0:6, 36:40] = 255       # 24 px island
+    labels = ConnectedComponentLabeler(min_area=1, max_area_frac=0.20).label(binary)
+    unique = set(np.unique(labels)) - {0}
+    assert len(unique) == 1
+    assert int(np.count_nonzero(labels)) == 24
 
 
 def test_ccl_drops_low_solidity():
@@ -133,6 +164,34 @@ def test_yolo_box_extractor(tmp_path: Path):
         assert p.mask.max() == 255
         assert len(p.contour) >= 4
         assert p.id in (0, 1)
+        assert p.class_id in (0, 1)
+
+
+def test_infer_board_shape():
+    assert infer_board_shape(9) == (3, 3)
+    assert infer_board_shape(16) == (4, 4)
+    assert infer_board_shape(35) == (7, 5)
+    assert infer_board_shape(35, prefer_rows=7, prefer_cols=5) == (7, 5)
+    assert infer_board_shape(9, prefer_rows=7, prefer_cols=5) == (3, 3)
+
+
+def test_count_for_grid_prefers_labels_when_close():
+    from src.core.grid import count_for_grid
+
+    assert count_for_grid(10, 9) == 9
+    assert count_for_grid(17, 16) == 16
+    assert count_for_grid(9, 9) == 9
+    assert count_for_grid(35, 9) == 35
+    assert count_for_grid(8, None) == 8
+
+
+def test_orient_foreground_inverts_majority_table():
+    gray = np.full((20, 20), 200.0)
+    gray[4:10, 4:10] = 40.0
+    binary = np.where(gray > 100, 255.0, 0.0)
+    out = orient_foreground(gray, binary)
+    assert out[7, 7] == 255
+    assert out[0, 0] == 0
 
 
 def test_gt_label_path(tmp_path: Path):
@@ -144,3 +203,12 @@ def test_gt_label_path(tmp_path: Path):
     lbl.write_text("0 0.5 0.5 0.1 0.1\n")
     found = gt_label_path(img)
     assert found == lbl
+
+
+def test_count_yolo_classes(tmp_path: Path):
+    from src.contour_extraction import count_yolo_classes
+
+    labels = tmp_path / "board.txt"
+    labels.write_text("0 0.1 0.1 0.1 0.1\n1 0.5 0.5 0.1 0.1\n0 0.8 0.8 0.1 0.1\n")
+    assert count_yolo_classes(labels) == 2
+    assert count_yolo_classes(None) == 0

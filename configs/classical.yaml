@@ -2,7 +2,8 @@
 # ws + wc should remain 1.0; retune on validation puzzles only.
 
 method: classical
-rows: 7   # 35-piece boards are 7×5; override per puzzle
+infer_grid: true          # 9→3×3, 16→4×4, 35→7×5 from piece count
+rows: 7                   # used when N already equals rows×cols
 cols: 5
 filter:
   median_k: 3
@@ -15,9 +16,11 @@ segmentation:
   min_area_frac: 0.001
   max_aspect: 5.0         # drop thin tools (Allen keys, strips)
   min_solidity: 0.35      # drop spindly debris (area / bbox area)
+  min_rel_area: 0.40      # drop blobs smaller than 40% of the median piece
+  max_area_frac: 0.25     # drop table-sized remnants
   close_k: 3              # small close; large kernels merge neighbouring pieces
-  keep_n: 35              # keep the 35 largest remaining blobs
-  use_gt_boxes: true      # crop from YOLO labels when data/ground_truth exists
+  keep_n: null            # runtime: unique YOLO class count when labels exist
+  use_gt_boxes: false     # spec path is CCL; set true to crop YOLO boxes
 matching:
   ws: 0.85  # shape weight (tabs/blanks after clean silhouettes)
   wc: 0.15  # colour weight (most faces are near-white)

@@ -37,25 +37,36 @@ def _shape_dissimilarity(profile_a: np.ndarray, profile_b: np.ndarray, n: int = 
 
 
 def _colour_dissimilarity(colour_a: np.ndarray, colour_b: np.ndarray, n: int = 32) -> float:
-    """Mean squared Lab distance between two colour strips (reversed alignment)."""
+    """Mean squared Lab distance between two colour strips (reversed alignment).
+
+    Missing samples are NaN (not Lab zeros). If no overlapping valid samples
+    remain, return +inf so the pair is never treated as a perfect match.
+    """
     ca = _resample(colour_a, n)
     cb = _resample(colour_b, n)[::-1]
-    valid = (np.abs(ca).sum(axis=1) > 1e-6) & (np.abs(cb).sum(axis=1) > 1e-6)
+    valid = np.isfinite(ca).all(axis=1) & np.isfinite(cb).all(axis=1)
     if not np.any(valid):
-        return 0.0
+        return float("inf")
     diff = ca[valid] - cb[valid]
     return float(np.mean(np.sum(diff ** 2, axis=1)))
 
 
-ILLEGAL_COST = 1.0e6
+ILLEGAL_COST = float("inf")
+
+
+def _normalize_shape(e_shape: float, pa: np.ndarray, pb: np.ndarray, eps: float = 1e-6) -> float:
+    """Ê_shape = E_shape / (std(p)² + std(q)² + ε)."""
+    denom = float(np.var(pa) + np.var(pb)) + eps
+    return e_shape / denom
 
 
 class ClassicalCompatibilityMatcher(CompatibilityMatcher):
     """Build (N, 4, N, 4) dissimilarity tensor using shape + colour.
 
-    D(i, si, j, sj) = ws * shape_dissim + wc * colour_dissim.
-    Self-pairs stay inf. Same-class (tab-tab / blank-blank) and flat sides
-    get a large finite penalty so the assembler can still fill every cell.
+    D(i, si, j, sj) = ws * Ê_shape + wc * Ê_colour.
+    Shape is normalized by profile variance; colour by per-puzzle median.
+    Self-pairs, flat sides, and same-class (tab-tab / blank-blank) stay +inf
+    so the assembler never chooses them.
     """
 
     def __init__(self, ws: float = 0.3, wc: float = 0.7) -> None:
@@ -65,6 +76,9 @@ class ClassicalCompatibilityMatcher(CompatibilityMatcher):
     def build(self, pieces: list[Piece]) -> CompatibilityTensor:
         n = len(pieces)
         dissim = np.full((n, 4, n, 4), np.inf, dtype=np.float64)
+
+        raw_shape = np.full((n, 4, n, 4), np.inf, dtype=np.float64)
+        raw_colour = np.full((n, 4, n, 4), np.inf, dtype=np.float64)
 
         for i in range(n):
             if not pieces[i].sides:
@@ -78,13 +92,28 @@ class ClassicalCompatibilityMatcher(CompatibilityMatcher):
                         continue
                     for sj in range(4):
                         side_b = pieces[j].sides[sj]
+                        if side_a.cls == "flat" or side_b.cls == "flat" or side_a.cls == side_b.cls:
+                            continue
                         ds = _shape_dissimilarity(side_a.profile, side_b.profile)
                         dc = _colour_dissimilarity(side_a.colour, side_b.colour)
-                        cost = self.ws * ds + self.wc * dc
-                        if side_a.cls == "flat" or side_b.cls == "flat":
-                            cost += ILLEGAL_COST
-                        elif side_a.cls == side_b.cls:
-                            cost += ILLEGAL_COST
-                        dissim[i, si, j, sj] = cost
+                        raw_shape[i, si, j, sj] = _normalize_shape(
+                            ds, side_a.profile, side_b.profile,
+                        )
+                        raw_colour[i, si, j, sj] = dc
+
+        finite_colours = raw_colour[np.isfinite(raw_colour)]
+        colour_median = float(np.median(finite_colours)) if len(finite_colours) > 0 else 1.0
+        colour_median = max(colour_median, 1e-6)
+
+        for i in range(n):
+            for si in range(4):
+                for j in range(n):
+                    for sj in range(4):
+                        es = raw_shape[i, si, j, sj]
+                        ec = raw_colour[i, si, j, sj]
+                        if not np.isfinite(es):
+                            continue
+                        ec_norm = ec / colour_median if np.isfinite(ec) else np.inf
+                        dissim[i, si, j, sj] = self.ws * es + self.wc * ec_norm
 
         return CompatibilityTensor(dissim=dissim)

@@ -15,9 +15,10 @@ INTERIOR_FLAT_PENALTY = 5.0e4
 class GreedyBestFirstAssembler(Assembler):
     """Grow the board from the most confident adjacent placement.
 
-    Seeds the top-left cell with corner pieces (flats facing north+west), then
-    at each step fills the frontier cell whose best leftover piece is cheapest.
-    Always fills every cell: illegal geometry is a large penalty, not a skip.
+    Seeds the top-left cell with a corner piece (flats facing north+west).
+    Illegal geometry (inf dissim) is skipped. If no legal move remains, the
+    best partial arrangement is returned instead of force-filling cells.
+    Tie-break: more pieces placed, then lower total dissim, then lower id/rot.
     """
 
     def __init__(self, beam_k: int = 8) -> None:
@@ -31,37 +32,84 @@ class GreedyBestFirstAssembler(Assembler):
         cols: int,
     ) -> AssemblyState:
         n = len(pieces)
+        empty = AssemblyState(grid=[[None] * cols for _ in range(rows)], used=set())
         if n == 0:
-            return AssemblyState(grid=[[None] * cols for _ in range(rows)], used=set())
+            return empty
 
-        seeds: list[AssemblyState] = []
-        for pid in range(n):
-            for rot in range(4):
-                cost = self._seed_cost(pieces[pid], rot, rows, cols)
-                grid = [[None] * cols for _ in range(rows)]
-                grid[0][0] = Placement(piece_id=pid, row=0, col=0, rot=rot)
-                seeds.append(AssemblyState(grid=grid, used={pid}, total_dissim=cost))
-
-        seeds.sort(key=lambda s: s.total_dissim)
+        seeds = self._seed_states(pieces, rows, cols)
+        if not seeds:
+            return empty
+        seeds.sort(key=lambda s: (s.total_dissim, min(s.used), 0))
         beams = seeds[: max(self.beam_k, 1)]
+        best = self._pick_best(beams)
         target = min(rows * cols, n)
 
         for _ in range(target - 1):
             next_beams: list[AssemblyState] = []
+            grew = False
             for state in beams:
                 if len(state.used) >= target:
                     next_beams.append(state)
                     continue
-                next_beams.extend(
-                    self._expand_frontier(state, pieces, tensor, rows, cols)
-                )
+                children = self._expand_frontier(state, pieces, tensor, rows, cols)
+                growing = [c for c in children if len(c.used) > len(state.used)]
+                if growing:
+                    next_beams.extend(growing)
+                    grew = True
+                else:
+                    next_beams.append(state)
             if not next_beams:
                 break
-            next_beams.sort(key=lambda s: s.total_dissim)
+            next_beams.sort(
+                key=lambda s: (-len(s.used), s.total_dissim, min(s.used) if s.used else 0)
+            )
             beams = next_beams[: self.beam_k]
+            cand = self._pick_best(beams)
+            if self._better(cand, best):
+                best = cand
+            if not grew:
+                break
 
-        beams.sort(key=lambda s: s.total_dissim)
-        return beams[0]
+        return best
+
+    def _seed_states(self, pieces: list[Piece], rows: int, cols: int) -> list[AssemblyState]:
+        n = len(pieces)
+        corner_ids = [
+            pid for pid in range(n)
+            if pieces[pid].is_corner or (
+                pieces[pid].sides
+                and sum(s.cls == "flat" for s in pieces[pid].sides) >= 2
+            )
+        ]
+        candidates = corner_ids if corner_ids else list(range(n))
+        seeds: list[AssemblyState] = []
+        for pid in candidates:
+            for rot in range(4):
+                cost = self._seed_cost(pieces[pid], rot, rows, cols)
+                if not np.isfinite(cost):
+                    continue
+                grid = [[None] * cols for _ in range(rows)]
+                grid[0][0] = Placement(piece_id=pid, row=0, col=0, rot=rot)
+                seeds.append(AssemblyState(grid=grid, used={pid}, total_dissim=cost))
+        if not seeds:
+            pid, rot = candidates[0], 0
+            grid = [[None] * cols for _ in range(rows)]
+            grid[0][0] = Placement(piece_id=pid, row=0, col=0, rot=rot)
+            seeds.append(AssemblyState(grid=grid, used={pid}, total_dissim=0.0))
+        return seeds
+
+    @staticmethod
+    def _better(a: AssemblyState, b: AssemblyState) -> bool:
+        if len(a.used) != len(b.used):
+            return len(a.used) > len(b.used)
+        return a.total_dissim < b.total_dissim
+
+    def _pick_best(self, states: list[AssemblyState]) -> AssemblyState:
+        best = states[0]
+        for s in states[1:]:
+            if self._better(s, best):
+                best = s
+        return best
 
     def _expand_frontier(
         self,
@@ -73,14 +121,14 @@ class GreedyBestFirstAssembler(Assembler):
     ) -> list[AssemblyState]:
         frontier = self._frontier_cells(state, rows, cols)
         if not frontier:
-            return [state]
+            return []
         moves: list[AssemblyState] = []
         for r, c in frontier:
             moves.extend(
                 self._candidates_for_cell(state, pieces, tensor, r, c, rows, cols)
             )
         if not moves:
-            return [state]
+            return []
         moves.sort(key=lambda s: s.total_dissim)
         return moves[: max(self.beam_k, 1)]
 
@@ -139,16 +187,13 @@ class GreedyBestFirstAssembler(Assembler):
     ) -> list[AssemblyState]:
         results: list[AssemblyState] = []
         n = len(pieces)
-        best: tuple[float, int, int] | None = None
 
         for pid in range(n):
             if pid in state.used:
                 continue
             for rot in range(4):
                 cost = self._placement_cost(state, pieces, tensor, pid, rot, r, c, rows, cols)
-                if best is None or cost < best[0]:
-                    best = (cost, pid, rot)
-                if cost >= ILLEGAL_COST:
+                if not np.isfinite(cost) or cost >= ILLEGAL_COST:
                     continue
                 new_grid = [row[:] for row in state.grid]
                 new_grid[r][c] = Placement(piece_id=pid, row=r, col=c, rot=rot)
@@ -158,21 +203,10 @@ class GreedyBestFirstAssembler(Assembler):
                     total_dissim=state.total_dissim + cost,
                 ))
 
-        if results:
-            results.sort(key=lambda s: s.total_dissim)
-            return results[: max(self.beam_k, 1)]
-
-        # Nothing legal — still place the least-bad leftover so the grid fills.
-        if best is None:
-            return [state]
-        cost, pid, rot = best
-        new_grid = [row[:] for row in state.grid]
-        new_grid[r][c] = Placement(piece_id=pid, row=r, col=c, rot=rot)
-        return [AssemblyState(
-            grid=new_grid,
-            used=state.used | {pid},
-            total_dissim=state.total_dissim + cost,
-        )]
+        if not results:
+            return []
+        results.sort(key=lambda s: (s.total_dissim, min(s.used)))
+        return results[: max(self.beam_k, 1)]
 
     def _placement_cost(
         self,

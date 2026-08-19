@@ -87,7 +87,7 @@ class PieceDescriptor(ABC):
 
 
 class CompatibilityMatcher(ABC):
-    """Build the (N, 4, N, 4) dissimilarity tensor. Classical, Siamese, and GNN all implement this."""
+    """Build the (N, 4, N, 4) dissimilarity tensor. Classical and Siamese implement this; GNN is a weak extra."""
 
     @abstractmethod
     def build(self, pieces: list[Piece]) -> CompatibilityTensor:

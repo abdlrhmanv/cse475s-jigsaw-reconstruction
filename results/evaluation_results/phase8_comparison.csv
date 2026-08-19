@@ -1,0 +1,4 @@
+method,n_boards,orientation_accuracy,Q,geometry_Q,position_accuracy,neighbour_accuracy,identity_neighbour_accuracy,complete_reconstruction,runtime_s,n_placed,n_labelled,n_pieces
+classical,6,,0.0513,0.2,,0.2564,0.2564,0.0,17.235,14.6667,,14.6667
+gnn,6,,0.0612,0.2,,0.306,0.306,0.0,17.1433,14.3333,,14.6667
+siamese,6,,0.0582,0.2,,0.2908,0.2908,0.0,17.0935,14.3333,,14.6667

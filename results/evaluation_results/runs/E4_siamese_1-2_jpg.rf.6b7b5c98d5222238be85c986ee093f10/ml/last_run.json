@@ -1,0 +1,5 @@
+{
+  "method": "siamese",
+  "weights": "checkpoints/siamese.pt",
+  "checkpoints_dir": "checkpoints"
+}

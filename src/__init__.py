@@ -1,1 +1,1 @@
-"""CSE475s jigsaw reconstruction library."""
+"""CSE480 jigsaw reconstruction library."""

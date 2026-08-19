@@ -38,12 +38,14 @@ class Piece:
     mask: np.ndarray
     contour: np.ndarray  # (M, 2) in crop coordinates
     bbox: tuple[int, int, int, int]  # x0, y0, x1, y1 in the full scrambled image
-    # Principal-axis angle of the mask. Assembly still searches discrete 90° rotations.
+    # Principal-axis angle of the mask (pre-deskew). After describe(), the crop
+    # is axis-aligned and flats are snapped: corners N+W, edges N.
     pca_theta: float
     corners: np.ndarray  # (4, 2), clockwise from top-left after PCA-align
     sides: list[Side] = field(default_factory=list)
     is_corner: bool = False
     is_border: bool = False
+    class_id: int | None = None  # YOLO class index when boxes are used; else None
 
     def side_toward(self, rot: int, board_dir: int) -> Side:
         """Side that faces `board_dir` after `rot` 90° clockwise placements.

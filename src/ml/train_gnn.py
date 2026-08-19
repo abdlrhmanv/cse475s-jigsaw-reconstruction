@@ -1,4 +1,8 @@
-"""Train PuzzleGNN on synthetic grid graphs (known adjacency)."""
+"""Train PuzzleGNN on synthetic grid graphs (known adjacency).
+
+GNN is a weak extra on this dataset (real val_ap peaked ~0.26). Prefer
+Siamese as the ML matcher; this trainer remains for the ablation.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,7 @@ from src.core.ribbons import pack_ribbon
 from src.core.types import Piece, Side
 from src.ml.gnn import PuzzleGNN
 from src.ml.gnn_graph import SideGraph, build_side_graph
+from src.ml.train_metrics import binary_pr_metrics
 
 
 def _synthetic_piece(pid: int, profiles: list[np.ndarray], classes: list[str], rng: np.random.Generator) -> Piece:
@@ -83,7 +88,7 @@ def make_synthetic_grid(rows: int = 3, cols: int = 3, rng: np.random.Generator |
 
 
 def graph_to_tensors(g: SideGraph, device: str) -> tuple[torch.Tensor, ...]:
-    ribbons = torch.from_numpy(g.ribbons).to(device)
+    ribbons = torch.from_numpy(np.nan_to_num(g.ribbons, nan=0.0)).to(device)
     src = torch.from_numpy(g.edge_src).to(device)
     dst = torch.from_numpy(g.edge_dst).to(device)
     et = torch.from_numpy(g.edge_type).to(device)
@@ -101,7 +106,12 @@ def train_gnn(
     device: str | None = None,
     rows: int = 3,
     cols: int = 3,
+    real: bool = False,
+    max_boards: int = 40,
+    data_dir: str | Path = "data",
 ) -> PuzzleGNN:
+    torch.manual_seed(42)
+    np.random.seed(42)
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     model = PuzzleGNN().to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
@@ -114,21 +124,45 @@ def train_gnn(
             graphs.append(build_side_graph(pieces, adjacency=adj, top_k=8))
         return graphs
 
-    train_g = batch_graphs(n_train, 0)
-    val_g = batch_graphs(n_val, 99)
+    if real:
+        from src.ml.real_dataset import graphs_from_split
+
+        print(f"Building real GNN graphs (max_boards={max_boards})...")
+        train_g = graphs_from_split("train", data_dir, max_boards=max_boards)
+        val_g = graphs_from_split("val", data_dir, max_boards=max(4, max_boards // 5))
+        print(f"Real graphs: train={len(train_g)}  val={len(val_g)}")
+        if not train_g:
+            print("No real graphs found; falling back to synthetic grids.")
+            train_g = batch_graphs(n_train, 0)
+            val_g = batch_graphs(n_val, 99)
+        else:
+            extra = batch_graphs(16, 3)
+            train_g = list(train_g) + extra
+            print(f"Mixed in {len(extra)} synthetic grids for geometry.")
+            if not val_g:
+                val_g = train_g[-max(1, len(train_g) // 5) :]
+    else:
+        train_g = batch_graphs(n_train, 0)
+        val_g = batch_graphs(n_val, 99)
     ckpt_path = Path(ckpt_path)
     ckpt_path.parent.mkdir(parents=True, exist_ok=True)
-    best, stalled, patience = -1.0, 0, 10
+    best_ap, stalled, patience = -1.0, 0, 10
 
     for epoch in range(epochs):
         model.train()
         tr = 0.0
+        n_steps = 0
         for g in train_g:
             ribbons, src, dst, et, y, inter = graph_to_tensors(g, device)
+            if y is None or not bool(inter.any()):
+                continue
             p, _ = model(ribbons, src, dst, et)
-            # BCE on inter-piece edges only; intra edges have no neighbour label
-            loss = F.binary_cross_entropy(p[inter], y[inter])
-            # peaky softmax over candidates of each side (mutual exclusion)
+            p = p.clamp(1e-6, 1 - 1e-6)
+            y_i = y[inter]
+            n_pos = y_i.sum().clamp(min=1.0)
+            n_neg = (1.0 - y_i).sum().clamp(min=1.0)
+            sample_w = torch.where(y_i > 0.5, n_neg / n_pos, torch.ones_like(y_i))
+            loss = F.binary_cross_entropy(p[inter], y_i, weight=sample_w)
             n_nodes = ribbons.shape[0]
             peak = torch.tensor(0.0, device=device)
             inter_src = src[inter]
@@ -142,25 +176,34 @@ def train_gnn(
             loss.backward()
             opt.step()
             tr += float(loss.detach())
+            n_steps += 1
 
         model.eval()
-        tp = fp = fn = 0
+        scores: list[np.ndarray] = []
+        labels: list[np.ndarray] = []
         with torch.no_grad():
             for g in val_g:
                 ribbons, src, dst, et, y, inter = graph_to_tensors(g, device)
+                if y is None or not bool(inter.any()):
+                    continue
                 p, _ = model(ribbons, src, dst, et)
-                pred = (p[inter] >= 0.5).cpu().numpy()
-                yt = y[inter].cpu().numpy() >= 0.5
-                tp += int(np.sum(pred & yt))
-                fp += int(np.sum(pred & ~yt))
-                fn += int(np.sum(~pred & yt))
-        prec = tp / max(tp + fp, 1)
-        rec = tp / max(tp + fn, 1)
-        f1 = 2 * prec * rec / max(prec + rec, 1e-8)
-        print(f"epoch {epoch+1:02d}  train_loss={tr/len(train_g):.4f}  val_f1={f1:.3f}")
-        if f1 > best:
-            best, stalled = f1, 0
-            torch.save({"model": model.state_dict(), "val_f1": f1}, ckpt_path)
+                scores.append(p[inter].cpu().numpy())
+                labels.append(y[inter].cpu().numpy())
+        if not scores:
+            print("epoch skipped (no labelled inter edges)")
+            continue
+        metrics = binary_pr_metrics(np.concatenate(scores), np.concatenate(labels))
+        print(
+            f"epoch {epoch+1:02d}  train_loss={tr/max(n_steps,1):.4f}  "
+            f"val_f1@0.5={metrics['f1']:.3f}  val_f1*={metrics['f1_best']:.3f}@t={metrics['t_best']:.2f}  "
+            f"val_ap={metrics['ap']:.3f}  p_pos={metrics['p_pos']:.3f}  p_neg={metrics['p_neg']:.3f}"
+        )
+        if metrics["ap"] > best_ap:
+            best_ap, stalled = metrics["ap"], 0
+            torch.save(
+                {"model": model.state_dict(), "val_f1": metrics["f1_best"], "val_ap": metrics["ap"]},
+                ckpt_path,
+            )
         else:
             stalled += 1
             if stalled >= patience:

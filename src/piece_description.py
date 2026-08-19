@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from itertools import combinations
+
 import numpy as np
 
-from src.contour_extraction import MooreContourTracer, deskew_piece
+from src.contour_extraction import MooreContourTracer, deskew_piece, rotate_piece_cw
 from src.core.protocols import CornerFinder, PieceDescriptor
 from src.core.types import Piece, Side, SideClass
 from src.core.ribbons import pack_ribbon
@@ -133,12 +135,47 @@ def _snap_to_contour(corners: np.ndarray, contour: np.ndarray) -> np.ndarray:
 # Corner finders
 # ---------------------------------------------------------------------------
 
-class HybridCornerFinder(CornerFinder):
-    """PCA rectangle snapped onto the contour.
+def _polygon_area(pts: np.ndarray) -> float:
+    x, y = pts[:, 0], pts[:, 1]
+    return 0.5 * abs(float(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1))))
 
-    Tab tips sit on the convex hull, so hull+90° picking often returns tabs.
-    The PCA rectangle tracks the piece body; nearest contour points are the
-    true corners.
+
+def _best_quad(pts: np.ndarray) -> np.ndarray | None:
+    """4 hull points with large area, similar sides, and ~90° corners (not tab tips)."""
+    n = len(pts)
+    if n < 4:
+        return None
+    if n == 4:
+        return _order_corners_clockwise(pts)
+    sample = pts
+    if n > 22:
+        idx = np.linspace(0, n - 1, 22).astype(int)
+        sample = pts[idx]
+    best_s, best = -1.0, None
+    for comb in combinations(range(len(sample)), 4):
+        ordered = _order_corners_clockwise(sample[list(comb)])
+        area = _polygon_area(ordered)
+        if area < 1.0:
+            continue
+        lengths = np.linalg.norm(np.roll(ordered, -1, axis=0) - ordered, axis=1)
+        var = float(np.var(lengths))
+        angles = [
+            _interior_angle(ordered[i - 1], ordered[i], ordered[(i + 1) % 4])
+            for i in range(4)
+        ]
+        if any(a < 55.0 or a > 125.0 for a in angles):
+            continue
+        score = area / (1.0 + var)
+        if score > best_s:
+            best_s, best = score, ordered
+    return best
+
+
+class HybridCornerFinder(CornerFinder):
+    """Hull → RDP → largest near-rectangular quad. PCA-rect is the fallback.
+
+    Tab tips sit on the convex hull, so a 4-point subset with ~90° angles and
+    similar side lengths prefers the piece body over a tab apex.
     """
 
     def __init__(self, epsilon_frac: float = 0.02) -> None:
@@ -147,9 +184,19 @@ class HybridCornerFinder(CornerFinder):
     def find(self, contour: np.ndarray) -> np.ndarray:
         if len(contour) < 4:
             return contour[:4] if len(contour) > 0 else np.zeros((4, 2), dtype=np.int32)
-        rect = _pca_rect_corners(contour)
-        snapped = _snap_to_contour(rect, contour)
-        return _order_corners_clockwise(snapped)
+        hull_idx = _convex_hull(contour)
+        hull = contour[hull_idx]
+        peri = float(np.linalg.norm(np.diff(hull, axis=0, append=hull[:1]), axis=1).sum())
+        simplified = _rdp(
+            np.vstack([hull, hull[:1]]),
+            max(self.epsilon_frac * peri, 1.0),
+        )[:-1]
+        if len(simplified) < 4:
+            simplified = hull
+        quad = _best_quad(simplified.astype(np.float64))
+        if quad is None:
+            quad = _snap_to_contour(_pca_rect_corners(contour), contour)
+        return _order_corners_clockwise(quad)
 
 
 class CurvatureCornerFinder(CornerFinder):
@@ -234,10 +281,17 @@ def _split_contour_by_corners(
     return sides
 
 
+FLAT_ABS_MIN: float = 4.0
+FLAT_REL_FACTOR: float = 0.14
+
+
 def _classify_side(
     profile: np.ndarray,
     side_pts: np.ndarray | None = None,
     centroid: np.ndarray | None = None,
+    *,
+    flat_abs_min: float = FLAT_ABS_MIN,
+    flat_rel_factor: float = FLAT_REL_FACTOR,
 ) -> SideClass:
     """Classify a side as tab, blank, or flat.
 
@@ -251,7 +305,7 @@ def _classify_side(
     length = 1.0
     if side_pts is not None and len(side_pts) >= 2:
         length = float(np.linalg.norm(side_pts[-1].astype(np.float64) - side_pts[0].astype(np.float64)))
-    if peak < max(4.0, 0.14 * length):
+    if peak < max(flat_abs_min, flat_rel_factor * length):
         return "flat"
     if side_pts is not None and centroid is not None and len(side_pts) >= 2:
         chord = 0.5 * (side_pts[0].astype(np.float64) + side_pts[-1].astype(np.float64))
@@ -316,7 +370,7 @@ def _sample_colour_strip(
     Returns (n_samples, 3) Lab array. Pixels outside the mask are skipped.
     """
     if len(side_pts) < 2 or image.ndim < 3:
-        return np.zeros((n_samples, 3))
+        return np.full((n_samples, 3), np.nan)
 
     # Compute inward normal direction (perpendicular to side baseline, pointing into piece)
     a = side_pts[0].astype(np.float64)
@@ -325,7 +379,7 @@ def _sample_colour_strip(
     normal = np.array([-ab[1], ab[0]], dtype=np.float64)
     normal_len = np.linalg.norm(normal)
     if normal_len < 1e-12:
-        return np.zeros((n_samples, 3))
+        return np.full((n_samples, 3), np.nan)
     normal /= normal_len
 
     h, w = mask.shape[:2]
@@ -345,7 +399,7 @@ def _sample_colour_strip(
         if 0 <= x < w and 0 <= y < h and mask[y, x] > 0:
             samples.append(_rgb_to_lab_approx(img_f[y, x].reshape(1, 3))[0])
         else:
-            samples.append(np.zeros(3))
+            samples.append(np.array([np.nan, np.nan, np.nan], dtype=np.float64))
     return np.array(samples)
 
 
@@ -364,6 +418,14 @@ class PieceDescriptorImpl(PieceDescriptor):
 
     def describe(self, piece: Piece) -> Piece:
         piece = deskew_piece(piece, tracer=MooreContourTracer())
+        piece = self._fill_sides(piece)
+        k = flat_frame_rotation(piece.sides)
+        if k:
+            piece = rotate_piece_cw(piece, k, tracer=MooreContourTracer())
+            piece = self._fill_sides(piece)
+        return piece
+
+    def _fill_sides(self, piece: Piece) -> Piece:
         if piece.contour is None or len(piece.contour) < 4:
             ys, xs = np.nonzero(piece.mask)
             if len(xs):
@@ -403,14 +465,36 @@ class PieceDescriptorImpl(PieceDescriptor):
                 cls=cls,
                 profile=profile,
                 colour=colour,
-                ribbon=pack_ribbon(colour, profile),
+                ribbon=pack_ribbon(np.nan_to_num(colour, nan=0.0), profile),
                 contour_pts=seg,
             ))
         piece.sides = sides
 
-        # Classify border/corner pieces
         flat_count = sum(1 for s in sides if s.cls == "flat")
         piece.is_border = flat_count >= 1
         piece.is_corner = flat_count >= 2
-
         return piece
+
+
+def flat_frame_rotation(sides: list[Side]) -> int:
+    """90° CW steps that put flats in a canonical local frame.
+
+    Corner (two adjacent flats) → N and W (indices 0 and 3).
+    Edge (one flat) → N (index 0).
+    Opposite flats → N and S (0 and 2). Interior / four flats → 0.
+    """
+    flats = sorted({int(s.index) % 4 for s in sides if s.cls == "flat"})
+    if len(flats) == 1:
+        return flats[0] % 4
+    if len(flats) == 2:
+        a, b = flats
+        if (b - a) % 4 == 2:
+            return 0 if a == 0 else 1
+        mapping = {
+            frozenset({0, 3}): 0,
+            frozenset({0, 1}): 3,
+            frozenset({1, 2}): 2,
+            frozenset({2, 3}): 1,
+        }
+        return mapping.get(frozenset(flats), 0)
+    return 0

@@ -55,3 +55,24 @@ def check_no_leakage(splits: dict[str, list[str]]) -> None:
                     f"Leakage: {len(overlap)} stems in both {s1} and {s2}: "
                     f"{sorted(overlap)[:5]}..."
                 )
+
+
+def source_stem(stem: str) -> str:
+    """Roboflow `name.rf.hash` → `name` so augmentations of one photo group together."""
+    if ".rf." in stem:
+        return stem.split(".rf.")[0]
+    return stem
+
+
+def check_no_source_leakage(splits: dict[str, list[str]]) -> None:
+    """Raise if the same source image (before `.rf.`) appears in two splits."""
+    keys = list(splits.keys())
+    grouped = {k: {source_stem(s) for s in splits[k]} for k in keys}
+    for i, s1 in enumerate(keys):
+        for s2 in keys[i + 1 :]:
+            overlap = grouped[s1] & grouped[s2]
+            if overlap:
+                raise ValueError(
+                    f"Source leakage: {len(overlap)} images in both {s1} and {s2}: "
+                    f"{sorted(overlap)[:5]}..."
+                )

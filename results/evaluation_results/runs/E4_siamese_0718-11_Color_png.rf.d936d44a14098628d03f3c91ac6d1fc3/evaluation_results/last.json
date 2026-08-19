@@ -1,0 +1,11 @@
+{
+  "input": "data/input/test/0718-11_Color_png.rf.d936d44a14098628d03f3c91ac6d1fc3.jpg",
+  "method": "siamese",
+  "extraction": "yolo",
+  "n_pieces": 35,
+  "n_placed": 35,
+  "rows": 7,
+  "cols": 5,
+  "total_dissim": 8449081.914608479,
+  "note": "YOLO files label piece identities, not (row, col, rot) poses, so Q / position accuracy are not computed on this dump."
+}

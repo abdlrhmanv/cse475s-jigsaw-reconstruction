@@ -28,7 +28,7 @@ def pack_ribbon(colour: np.ndarray, profile: np.ndarray, n: int = RIBBON_LEN) ->
 
     Channel 0–2: Lab (L/100, a/128, b/128). Channel 3: profile / max(|profile|, 1).
     """
-    lab = resample(colour, n).astype(np.float64)
+    lab = np.nan_to_num(resample(colour, n).astype(np.float64), nan=0.0)
     if lab.ndim == 1:
         lab = np.stack([lab, np.zeros(n), np.zeros(n)], axis=-1)
     if lab.shape[-1] < 3:
@@ -37,7 +37,8 @@ def pack_ribbon(colour: np.ndarray, profile: np.ndarray, n: int = RIBBON_LEN) ->
     lab = lab[:, :3]
     lab_n = np.stack([lab[:, 0] / 100.0, lab[:, 1] / 128.0, lab[:, 2] / 128.0], axis=0)
 
-    prof = resample(profile, n).astype(np.float64)
-    scale = max(float(np.max(np.abs(prof))), 1.0)
+    prof = np.nan_to_num(resample(profile, n).astype(np.float64), nan=0.0)
+    finite = np.isfinite(prof)
+    scale = max(float(np.max(np.abs(prof[finite]))) if np.any(finite) else 1.0, 1.0)
     prof_n = (prof / scale)[np.newaxis, :]
     return np.concatenate([lab_n, prof_n], axis=0).astype(np.float32)

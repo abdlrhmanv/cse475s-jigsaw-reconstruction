@@ -7,7 +7,8 @@ import numpy as np
 from src.core.convolution import ConvolutionEngine
 from src.core.protocols import EdgeDetector, GradientOperator, ImageFilter
 from src.core.types import EdgeResult
-from src.enhancement import GaussianFilter, _ensure_float, _ensure_gray
+from src.core.image_utils import _ensure_gray
+from src.enhancement import GaussianFilter, _ensure_float
 
 
 class SobelOperator(GradientOperator):
@@ -128,16 +129,17 @@ class CannyEdgeDetector(EdgeDetector):
     @staticmethod
     def _hysteresis(strong: np.ndarray, weak: np.ndarray) -> np.ndarray:
         """BFS from strong pixels; promote reachable weak pixels."""
+        from collections import deque
+
         edges = strong.copy()
         h, w = edges.shape
-        # Seed queue with all strong pixels neighbouring a weak pixel
-        queue: list[tuple[int, int]] = []
+        queue: deque[tuple[int, int]] = deque()
         rs, cs = np.nonzero(strong)
         for r, c in zip(rs, cs):
             queue.append((r, c))
 
         while queue:
-            r, c = queue.pop()
+            r, c = queue.popleft()
             for dr in (-1, 0, 1):
                 for dc in (-1, 0, 1):
                     nr, nc = r + dr, c + dc

@@ -12,7 +12,7 @@ from src.core.factory import PipelineFactory
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="CSE475s jigsaw reconstruction (classical, Siamese, or GNN matching)."
+        description="CSE480 jigsaw reconstruction. Default matcher is classical; Siamese is the ML matcher; GNN is a weak extra."
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -21,7 +21,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--method",
         choices=("classical", "siamese", "gnn"),
         default="classical",
-        help="Which CompatibilityMatcher to use. Extraction and assembly stay the same.",
+        help="classical (default), siamese (ML matcher), or gnn (weak extra / ablation).",
     )
     reconstruct.add_argument(
         "--config",
@@ -34,14 +34,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Path to a scrambled puzzle image.",
     )
 
-    train = sub.add_parser("train-siamese", help="Train the Siamese ribbon CNN (synthetic pairs by default).")
+    train = sub.add_parser("train-siamese", help="Train the Siamese ribbon CNN.")
     train.add_argument("--epochs", type=int, default=20)
     train.add_argument("--batch-size", type=int, default=32)
     train.add_argument("--ckpt", default="checkpoints/siamese.pt")
+    train.add_argument("--real", action="store_true", help="Train on real boards using weak pose GT from piece IDs.")
+    train.add_argument("--max-boards", type=int, default=80)
+    train.add_argument("--data-dir", default="data")
 
-    train_g = sub.add_parser("train-gnn", help="Train the side-node GNN on synthetic grids.")
+    train_g = sub.add_parser("train-gnn", help="Train the side-node GNN (weak extra; prefer Siamese).")
     train_g.add_argument("--epochs", type=int, default=40)
     train_g.add_argument("--ckpt", default="checkpoints/gnn.pt")
+    train_g.add_argument("--real", action="store_true", help="Train on real boards using weak pose GT from piece IDs.")
+    train_g.add_argument("--max-boards", type=int, default=40)
+    train_g.add_argument("--data-dir", default="data")
     return parser.parse_args(argv)
 
 
@@ -57,11 +63,24 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     if args.command == "train-siamese":
         from src.ml.train_siamese import train_siamese
-        train_siamese(epochs=args.epochs, batch_size=args.batch_size, ckpt_path=args.ckpt)
+        train_siamese(
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            ckpt_path=args.ckpt,
+            real=args.real,
+            max_boards=args.max_boards,
+            data_dir=args.data_dir,
+        )
         return
     if args.command == "train-gnn":
         from src.ml.train_gnn import train_gnn
-        train_gnn(epochs=args.epochs, ckpt_path=args.ckpt)
+        train_gnn(
+            epochs=args.epochs,
+            ckpt_path=args.ckpt,
+            real=args.real,
+            max_boards=args.max_boards,
+            data_dir=args.data_dir,
+        )
         return
     if args.command != "reconstruct":
         raise SystemExit(2)

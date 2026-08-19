@@ -6,7 +6,8 @@ import numpy as np
 
 from src.core.convolution import ConvolutionEngine
 from src.core.protocols import Thresholder
-from src.enhancement import _ensure_float, _ensure_gray
+from src.core.image_utils import _ensure_gray
+from src.enhancement import _ensure_float
 
 
 class GlobalThreshold(Thresholder):

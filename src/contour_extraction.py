@@ -68,6 +68,8 @@ class MooreContourTracer(ContourTracer):
                 break  # closed the loop
 
             contour.append((cx, cy))
+            if len(contour) > h * w:
+                break  # Jacob-less Moore can cycle on thin blobs
 
         return np.array(contour, dtype=np.int32)
 
@@ -217,6 +219,26 @@ def deskew_piece(piece: Piece, tracer: ContourTracer | None = None) -> Piece:
     return piece
 
 
+def rotate_piece_cw(piece: Piece, k: int, tracer: ContourTracer | None = None) -> Piece:
+    """Rotate the crop `k` steps of 90° clockwise (same convention as Placement.rot)."""
+    k = int(k) % 4
+    if k == 0:
+        return piece
+    k_ccw = (-k) % 4
+    piece.image = np.rot90(piece.image, k=k_ccw)
+    piece.mask = np.rot90(piece.mask, k=k_ccw)
+    if piece.image.ndim == 3:
+        piece.image = piece.image.copy()
+        piece.image[piece.mask == 0] = 0
+    else:
+        piece.image = np.where(piece.mask > 0, piece.image, 0)
+    piece.contour = (tracer or MooreContourTracer()).trace(piece.mask)
+    piece.pca_theta = 0.0
+    piece.corners = np.empty((4, 2))
+    piece.sides = []
+    return piece
+
+
 def gt_label_path(image_path: str | Path) -> Path | None:
     """Map `data/input/<split>/<stem>.jpg` → `data/ground_truth/<split>/<stem>.txt`."""
     path = Path(image_path)
@@ -226,6 +248,20 @@ def gt_label_path(image_path: str | Path) -> Path | None:
             return cand
     sibling = path.with_suffix(".txt")
     return sibling if sibling.exists() else None
+
+
+def count_yolo_classes(label_path: str | Path | None) -> int:
+    """Unique YOLO class IDs in a label file (physical piece count, not pose)."""
+    if label_path is None:
+        return 0
+    path = Path(label_path)
+    if not path.exists():
+        return 0
+    classes: set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            classes.add(line.split()[0])
+    return len(classes)
 
 
 class YoloBoxExtractor:
@@ -295,6 +331,7 @@ class YoloBoxExtractor:
                 bbox=(x0p, y0p, x1p, y1p),
                 pca_theta=PieceExtractorImpl._pca_angle(mask_u8),
                 corners=np.empty((4, 2)),
+                class_id=int(_cid),
             ))
         return pieces
 
